@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
+
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import CustomerDashboard from "./pages/customer/Dashboard";
@@ -29,12 +30,12 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Index />} />
-            
+
             {/* Customer Routes */}
             <Route path="/dashboard" element={<CustomerDashboard />} />
             <Route path="/claims" element={<CustomerClaims />} />
             <Route path="/payments" element={<CustomerPayments />} />
-            
+
             {/* Admin Portal Routes */}
             <Route path="/novaportal" element={<AdminPortal />} />
             <Route path="/novaportal/manager" element={<ManagerDashboard />} />
@@ -44,7 +45,7 @@ const App = () => (
             <Route path="/novaportal/officer" element={<OfficerDashboard />} />
             <Route path="/novaportal/officer/claims" element={<OfficerClaims />} />
             <Route path="/novaportal/officer/payments" element={<OfficerPayments />} />
-            
+
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

@@ -1,62 +1,46 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
+import { Session, User } from '@supabase/supabase-js';
 
-export type UserRole = 'customer' | 'officer' | 'manager' | null;
-
-interface User {
-  username: string;
-  role: UserRole;
-  name: string;
-}
-
-interface AuthContextType {
+type AuthContextType = {
   user: User | null;
-  isAuthenticated: boolean;
-  login: (username: string, password: string) => { success: boolean; message: string };
-  logout: () => void;
-}
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-// Dummy credentials
-const USERS = {
-  customer: { password: 'customer1', role: 'customer' as UserRole, name: 'John Doe' },
-  officer: { password: 'officer1', role: 'officer' as UserRole, name: 'Sarah Claims' },
-  admin: { password: 'admin123', role: 'manager' as UserRole, name: 'Admin Manager' },
+  session: Session | null;
+  loading: boolean;
 };
 
-export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  session: null,
+  loading: true,
+});
+
+export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const login = (username: string, password: string) => {
-    const userCredentials = USERS[username as keyof typeof USERS];
-    
-    if (userCredentials && userCredentials.password === password) {
-      setUser({
-        username,
-        role: userCredentials.role,
-        name: userCredentials.name,
-      });
-      return { success: true, message: 'Login successful!' };
-    }
-    
-    return { success: false, message: 'Invalid username or password' };
-  };
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setUser(data.session?.user ?? null);
+      setLoading(false);
+    });
 
-  const logout = () => {
-    setUser(null);
-  };
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, logout }}>
+    <AuthContext.Provider value={{ user, session, loading }}>
       {children}
     </AuthContext.Provider>
   );
 };
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-};
+export const useAuth = () => useContext(AuthContext);
