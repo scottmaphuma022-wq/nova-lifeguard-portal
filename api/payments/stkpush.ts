@@ -9,30 +9,47 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY!
 );
 
-const BASE_URL = process.env.MPESA_BASE_URL!;
+/* ============================
+   MPESA CONFIG
+============================ */
+const MPESA_ENV = process.env.MPESA_ENVIRONMENT || "sandbox";
+
+const BASE_URL =
+  MPESA_ENV === "production"
+    ? "https://api.safaricom.co.ke"
+    : "https://sandbox.safaricom.co.ke";
+
 const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE!;
 const MPESA_PASSKEY = process.env.MPESA_PASSKEY!;
 const MPESA_CALLBACK_URL = process.env.MPESA_CALLBACK_URL!;
 
+/* ============================
+   ACCESS TOKEN
+============================ */
 async function getAccessToken() {
+  const auth = Buffer.from(
+    `${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`
+  ).toString("base64");
+
   const { data } = await axios.get(
     `${BASE_URL}/oauth/v1/generate?grant_type=client_credentials`,
     {
-      auth: {
-        username: process.env.MPESA_CONSUMER_KEY!,
-        password: process.env.MPESA_CONSUMER_SECRET!,
-      },
+      headers: { Authorization: `Basic ${auth}` },
     }
   );
+
   return data.access_token;
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+/* ============================
+   HANDLER
+============================ */
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse
+) {
   if (req.method !== "POST") {
-    return res.status(405).json({
-      success: false,
-      message: "Method not allowed",
-    });
+    return res.status(405).json({ success: false, message: "Method not allowed" });
   }
 
   try {
@@ -45,7 +62,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Normalize Kenyan phone number
+    /* ============================
+       NORMALIZE PHONE
+    ============================ */
     let normalizedPhone = String(phone).trim();
     if (normalizedPhone.startsWith("0")) {
       normalizedPhone = `254${normalizedPhone.slice(1)}`;
@@ -54,32 +73,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       normalizedPhone = normalizedPhone.slice(1);
     }
 
-    /**
-     * 1️⃣ IDEMPOTENCY CHECK
-     * Prevent duplicate MPESA transactions if request is sent twice
-     */
-    const { data: existing } = await supabase
+    /* ============================
+       1️⃣ CREATE PAYMENT FIRST
+    ============================ */
+    const { data: payment, error: paymentError } = await supabase
+      .from("payments")
+      .insert({
+        user_id,
+        cover_id,
+        plan_tier,
+        amount_paid: amount,
+        payment_status: "initiated",
+      })
+      .select()
+      .single();
+
+    if (paymentError || !payment) {
+      console.error("Payment creation failed:", paymentError);
+      throw new Error("Failed to create payment");
+    }
+
+    /* ============================
+       2️⃣ IDEMPOTENT MPESA TX
+    ============================ */
+    const { data: existingTx } = await supabase
       .from("mpesa_transactions")
       .select("*")
-      .eq("user_id", user_id)
-      .eq("amount", amount)
-      .eq("transaction_status", "initiated")
-      .order("created_at", { ascending: false })
-      .limit(1)
+      .eq("payment_id", payment.id)
       .maybeSingle();
 
-    let transactionRow = existing;
+    let txRow = existingTx;
 
-    /**
-     * 2️⃣ CREATE MPESA TRANSACTION ROW (ONLY IF NONE EXISTS)
-     */
-    if (!transactionRow) {
+    if (!txRow) {
       const { data, error } = await supabase
         .from("mpesa_transactions")
         .insert({
           user_id,
+          payment_id: payment.id,
           phone_number: normalizedPhone,
-          amount: amount,
+          amount,
           transaction_type: "insurance_payment",
           transaction_status: "initiated",
         })
@@ -87,29 +119,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .single();
 
       if (error || !data) {
-        console.error("Failed to create MPESA transaction:", error);
-        throw error || new Error("Could not create MPESA transaction");
+        console.error("MPESA TX creation failed:", error);
+        throw new Error("Failed to create mpesa transaction");
       }
 
-      transactionRow = data;
+      txRow = data;
     }
 
-    console.log("Using MPESA transaction row:", transactionRow.id);
-
-    /**
-     * 3️⃣ GENERATE MPESA ACCESS TOKEN
-     */
+    /* ============================
+       3️⃣ MPESA ACCESS TOKEN
+    ============================ */
     const accessToken = await getAccessToken();
 
-    /**
-     * 4️⃣ PREPARE STK PUSH REQUEST
-     */
+    /* ============================
+       4️⃣ STK PUSH
+    ============================ */
     const timestamp = dayjs().format("YYYYMMDDHHmmss");
     const password = Buffer.from(
       `${MPESA_SHORTCODE}${MPESA_PASSKEY}${timestamp}`
     ).toString("base64");
 
-    const stkResponse = await axios.post(
+    const stkRes = await axios.post(
       `${BASE_URL}/mpesa/stkpush/v1/processrequest`,
       {
         BusinessShortCode: MPESA_SHORTCODE,
@@ -121,40 +151,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         PartyB: MPESA_SHORTCODE,
         PhoneNumber: normalizedPhone,
         CallBackURL: MPESA_CALLBACK_URL,
-        AccountReference: transactionRow.id,
+        AccountReference: payment.id,
         TransactionDesc: "Insurance Payment",
       },
       {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+        headers: { Authorization: `Bearer ${accessToken}` },
       }
     );
 
-    const checkoutRequestID = stkResponse.data.CheckoutRequestID;
-
-    /**
-     * 5️⃣ UPDATE TRANSACTION ROW WITH CHECKOUT REQUEST ID
-     */
+    /* ============================
+       5️⃣ UPDATE MPESA TX
+    ============================ */
     await supabase
       .from("mpesa_transactions")
-      .update({ checkout_request_id: checkoutRequestID })
-      .eq("id", transactionRow.id);
+      .update({
+        merchant_request_id: stkRes.data.MerchantRequestID,
+        checkout_request_id: stkRes.data.CheckoutRequestID,
+      })
+      .eq("id", txRow.id);
 
-    console.log("Updated MPESA transaction with CheckoutRequestID:", checkoutRequestID);
-
-    /**
-     * 6️⃣ RETURN RESPONSE TO FRONTEND
-     */
+    /* ============================
+       6️⃣ RESPONSE
+    ============================ */
     return res.status(200).json({
       success: true,
-      checkoutRequestID,
+      checkoutRequestID: stkRes.data.CheckoutRequestID,
     });
   } catch (err: any) {
-    console.error("STK Push error:", err);
+    console.error(
+      "❌ STK PUSH ERROR:",
+      err?.response?.data || err.message
+    );
+
     return res.status(500).json({
       success: false,
-      message: err.message,
+      message: "STK Push failed",
+      error: err?.response?.data || err.message,
     });
   }
 }
