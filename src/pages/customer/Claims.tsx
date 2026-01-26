@@ -1,17 +1,19 @@
-import { useState } from 'react';
-import { Plus, FileText, Upload, CheckCircle, Clock, XCircle, AlertCircle } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useEffect, useState } from 'react';
+import {
+  Plus,
+  CheckCircle,
+  Clock,
+  XCircle,
+  AlertCircle,
+  Calendar,
+  Banknote,
+  Link as LinkIcon,
+} from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -20,90 +22,156 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import DashboardLayout from '@/components/DashboardLayout';
+import { supabase } from '@/lib/supabaseClient';
 
+/* ------------------ types ------------------ */
 interface Claim {
   id: string;
-  type: string;
   amount: string;
   status: 'Submitted' | 'Pending' | 'Approved' | 'Rejected';
   date: string;
-  description: string;
+  reason: string;
+  documentUrl: string;
 }
 
-const claims: Claim[] = [
-  { id: 'CLM-001', type: 'Funeral Expenses', amount: 'KSH 150,000', status: 'Approved', date: '2024-01-15', description: 'Funeral expenses for family member' },
-  { id: 'CLM-002', type: 'Loan Guard', amount: 'KSH 200,000', status: 'Pending', date: '2024-01-20', description: 'Outstanding car loan coverage' },
-  { id: 'CLM-003', type: 'Disability', amount: 'KSH 100,000', status: 'Submitted', date: '2024-01-22', description: 'Permanent disability claim' },
-  { id: 'CLM-004', type: 'Funeral Expenses', amount: 'KSH 80,000', status: 'Rejected', date: '2024-01-10', description: 'Insufficient documentation' },
-];
-
+/* ------------------ status config ------------------ */
 const statusConfig = {
-  Submitted: { icon: Clock, color: 'text-info', bg: 'bg-info/10', label: 'Submitted' },
-  Pending: { icon: AlertCircle, color: 'text-warning', bg: 'bg-warning/10', label: 'Pending Review' },
-  Approved: { icon: CheckCircle, color: 'text-success', bg: 'bg-success/10', label: 'Approved' },
-  Rejected: { icon: XCircle, color: 'text-destructive', bg: 'bg-destructive/10', label: 'Rejected' },
+  Submitted: { icon: Clock, color: 'text-blue-600', bg: 'bg-blue-100' },
+  Pending: { icon: AlertCircle, color: 'text-yellow-600', bg: 'bg-yellow-100' },
+  Approved: { icon: CheckCircle, color: 'text-green-600', bg: 'bg-green-100' },
+  Rejected: { icon: XCircle, color: 'text-red-600', bg: 'bg-red-100' },
 };
 
+const formatCurrency = (amount: number) => `KSH ${amount.toLocaleString()}`;
+
+const mapStatus = (status: string): Claim['status'] => {
+  if (status === 'approved') return 'Approved';
+  if (status === 'rejected') return 'Rejected';
+  if (status === 'pending') return 'Pending';
+  return 'Submitted';
+};
+
+/* ------------------ component ------------------ */
 const CustomerClaims = () => {
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [claimType, setClaimType] = useState('');
-  const [amount, setAmount] = useState('');
-  const [description, setDescription] = useState('');
-  const [files, setFiles] = useState<FileList | null>(null);
   const { toast } = useToast();
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [files, setFiles] = useState<FileList | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  /* ------------------ load claims ------------------ */
+  useEffect(() => {
+    const loadClaims = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data, error } = await supabase
+        .from('claims')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('date_applied', { ascending: false });
+
+      if (error) {
+        toast({ title: 'Failed to load claims', variant: 'destructive' });
+        console.error('Load Claims Error:', error);
+        return;
+      }
+
+      setClaims(
+        (data || []).map((c) => ({
+          id: c.claim_number,
+          amount: formatCurrency(Number(c.claim_amount)),
+          status: mapStatus(c.claim_status),
+          date: new Date(c.date_applied).toISOString().split('T')[0],
+          reason: c.claim_reason,
+          documentUrl: c.document_url,
+        }))
+      );
+    };
+
+    loadClaims();
+  }, [toast]);
+
+  /* ------------------ submit claim ------------------ */
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    toast({
-      title: 'Claim Submitted!',
-      description: 'Your claim has been submitted successfully. We will review it shortly.',
-    });
-    
-    setIsDialogOpen(false);
-    setClaimType('');
-    setAmount('');
-    setDescription('');
-    setFiles(null);
-  };
 
-  const getStatusTimeline = (status: Claim['status']) => {
-    const steps = ['Submitted', 'Pending', 'Approved'];
-    const currentIndex = steps.indexOf(status === 'Rejected' ? 'Pending' : status);
-    
-    return (
-      <div className="flex items-center gap-2 mt-4">
-        {steps.map((step, index) => {
-          const isCompleted = index <= currentIndex;
-          const isCurrent = index === currentIndex;
-          const isRejected = status === 'Rejected' && step === 'Pending';
-          
-          return (
-            <div key={step} className="flex items-center">
-              <div
-                className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium ${
-                  isRejected
-                    ? 'bg-destructive text-destructive-foreground'
-                    : isCompleted
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-muted-foreground'
-                }`}
-              >
-                {index + 1}
-              </div>
-              {index < steps.length - 1 && (
-                <div
-                  className={`w-12 h-1 ${
-                    index < currentIndex ? 'bg-primary' : 'bg-muted'
-                  }`}
-                />
-              )}
-            </div>
-          );
-        })}
-      </div>
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) {
+      toast({ title: 'You must be logged in', variant: 'destructive' });
+      return;
+    }
+    if (!files?.length) {
+      toast({ title: 'Please select a file', variant: 'destructive' });
+      return;
+    }
+
+    const file = files[0];
+
+    // ---------------- strictly sanitize file name ----------------
+    const safeFileName = file.name
+      .normalize("NFKD")            // normalize unicode
+      .replace(/[^\w.-]/g, "_");    // only letters, numbers, _, ., -
+
+    const filePath = `${user.id}/${Date.now()}-${safeFileName}`;
+
+    // ---------------- upload to Supabase ----------------
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('claim-documents')
+      .upload(filePath, file, { cacheControl: '3600', upsert: false });
+
+    if (uploadError) {
+      toast({ title: 'File upload failed', variant: 'destructive' });
+      console.error('Upload Error:', uploadError);
+      return;
+    }
+
+    const { data: urlData } = supabase.storage
+      .from('claim-documents')
+      .getPublicUrl(filePath);
+
+    // ---------------- insert claim into table ----------------
+    const claimNumber = `CLM-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const { error } = await supabase.from('claims').insert({
+      user_id: user.id,
+      claim_number: claimNumber,
+      claim_amount: Number(amount),
+      claim_reason: reason,
+      document_url: urlData.publicUrl,
+    });
+
+    if (error) {
+      toast({ title: 'Failed to submit claim', variant: 'destructive' });
+      console.error('Insert Claim Error:', error);
+      return;
+    }
+
+    toast({ title: 'Claim submitted', description: 'Your claim has been successfully submitted.' });
+    setIsDialogOpen(false);
+    setAmount('');
+    setReason('');
+    setFiles(null);
+
+    // reload claims
+    const { data: newClaims } = await supabase
+      .from('claims')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('date_applied', { ascending: false });
+
+    setClaims(
+      (newClaims || []).map((c) => ({
+        id: c.claim_number,
+        amount: formatCurrency(Number(c.claim_amount)),
+        status: mapStatus(c.claim_status),
+        date: new Date(c.date_applied).toISOString().split('T')[0],
+        reason: c.claim_reason,
+        documentUrl: c.document_url,
+      }))
     );
   };
 
@@ -111,112 +179,44 @@ const CustomerClaims = () => {
     <DashboardLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex justify-between items-center">
           <div>
-            <h1 className="text-2xl lg:text-3xl font-bold">Claims</h1>
+            <h1 className="text-2xl font-bold">Claims</h1>
             <p className="text-muted-foreground">Submit and track your insurance claims</p>
           </div>
-          
+
+          {/* New Claim Modal */}
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                New Claim
-              </Button>
+              <Button><Plus className="mr-2 h-4 w-4" />New Claim</Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
+
+            <DialogContent>
               <DialogHeader>
                 <DialogTitle>Submit New Claim</DialogTitle>
-                <DialogDescription>
-                  Fill in the details below to submit a new insurance claim.
-                </DialogDescription>
+                <DialogDescription>Provide claim amount, reason, and supporting documents.</DialogDescription>
               </DialogHeader>
-              
+
               <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="claimType">Claim Type</Label>
-                  <Select value={claimType} onValueChange={setClaimType}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select claim type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="funeral">Funeral Expenses</SelectItem>
-                      <SelectItem value="loan">Loan Guard</SelectItem>
-                      <SelectItem value="disability">Permanent Disability</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div>
+                  <Label>Claim Amount</Label>
+                  <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} required />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="amount">Claim Amount (KSH)</Label>
-                  <Input
-                    id="amount"
-                    type="number"
-                    placeholder="Enter amount"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                  />
+                <div>
+                  <Label>Reason for Claim</Label>
+                  <Textarea value={reason} onChange={(e) => setReason(e.target.value)} required />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="description">Description</Label>
-                  <Textarea
-                    id="description"
-                    placeholder="Provide details about your claim..."
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    rows={3}
-                  />
+                <div>
+                  <Label>Supporting Document</Label>
+                  <Input type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => setFiles(e.target.files)} required />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="documents">Supporting Documents</Label>
-                  <div className="border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-primary transition-colors cursor-pointer">
-                    <Input
-                      id="documents"
-                      type="file"
-                      multiple
-                      accept=".pdf,.jpg,.jpeg,.png"
-                      className="hidden"
-                      onChange={(e) => setFiles(e.target.files)}
-                    />
-                    <label htmlFor="documents" className="cursor-pointer">
-                      <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                      <p className="text-sm text-muted-foreground">
-                        {files ? `${files.length} file(s) selected` : 'Click to upload PDF or images'}
-                      </p>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="flex gap-3 pt-4">
-                  <Button type="button" variant="outline" className="flex-1" onClick={() => setIsDialogOpen(false)}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" className="flex-1">
-                    Submit Claim
-                  </Button>
-                </div>
+                <Button type="submit" className="w-full">Submit Claim</Button>
               </form>
             </DialogContent>
           </Dialog>
-        </div>
-
-        {/* Stats */}
-        <div className="grid gap-4 md:grid-cols-4">
-          {[
-            { label: 'Total Claims', value: claims.length, color: 'primary' },
-            { label: 'Approved', value: claims.filter(c => c.status === 'Approved').length, color: 'success' },
-            { label: 'Pending', value: claims.filter(c => c.status === 'Pending' || c.status === 'Submitted').length, color: 'warning' },
-            { label: 'Rejected', value: claims.filter(c => c.status === 'Rejected').length, color: 'destructive' },
-          ].map((stat) => (
-            <Card key={stat.label} className="border-0 shadow-card">
-              <CardContent className="p-4">
-                <p className="text-sm text-muted-foreground">{stat.label}</p>
-                <p className="text-2xl font-bold">{stat.value}</p>
-              </CardContent>
-            </Card>
-          ))}
         </div>
 
         {/* Claims List */}
@@ -224,31 +224,27 @@ const CustomerClaims = () => {
           {claims.map((claim) => {
             const status = statusConfig[claim.status];
             const StatusIcon = status.icon;
-            
+
             return (
-              <Card key={claim.id} className="border-0 shadow-card">
-                <CardContent className="p-6">
-                  <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-                    <div className="flex items-start gap-4">
-                      <div className={`w-12 h-12 rounded-xl ${status.bg} flex items-center justify-center`}>
-                        <StatusIcon className={`h-6 w-6 ${status.color}`} />
+              <Card key={claim.id} className="shadow-sm">
+                <CardContent className="p-6 space-y-4">
+                  <div className="flex justify-between items-start">
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Badge className={`${status.bg} ${status.color}`}>
+                          <StatusIcon className="h-4 w-4 mr-1" />
+                          {claim.status}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">{claim.id}</span>
                       </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold">{claim.type}</h3>
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${status.bg} ${status.color}`}>
-                            {status.label}
-                          </span>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-1">{claim.description}</p>
-                        <p className="text-xs text-muted-foreground mt-2">
-                          {claim.id} • Submitted on {claim.date}
-                        </p>
+                      <p className="text-sm">{claim.reason}</p>
+                      <div className="flex items-center gap-4 text-sm text-muted-foreground">
+                        <span className="flex items-center gap-1"><Calendar className="h-4 w-4" />{claim.date}</span>
+                        <span className="flex items-center gap-1"><Banknote className="h-4 w-4" />{claim.amount}</span>
+                        <a href={claim.documentUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-primary hover:underline">
+                          <LinkIcon className="h-4 w-4" />Document
+                        </a>
                       </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xl font-bold">{claim.amount}</p>
-                      {getStatusTimeline(claim.status)}
                     </div>
                   </div>
                 </CardContent>

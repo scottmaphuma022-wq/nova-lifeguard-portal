@@ -24,8 +24,7 @@ const Header = () => {
   const navLinks = [
     { name: 'Home', href: '/' },
     { name: 'Insurance Covers', href: '/#covers' },
-    { name: 'Payments', href: '/payments' },
-    { name: 'Claims', href: '/claims' },
+  
   ];
 
   const isActive = (href: string) => {

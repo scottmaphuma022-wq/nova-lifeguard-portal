@@ -1,0 +1,17 @@
+{
+  "functions": {
+    "api/**/*.ts": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/novaportal",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/novaportal/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

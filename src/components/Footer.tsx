@@ -49,7 +49,7 @@ const Footer = () => {
             <div className="space-y-3">
               <a href="tel:0712345678" className="flex items-center gap-3 text-background/70 hover:text-primary transition-colors">
                 <Phone className="h-4 w-4" />
-                <span>0712 345 678</span>
+                <span>0729315019</span>
               </a>
               <a href="mailto:info@novainsurance.co.ke" className="flex items-center gap-3 text-background/70 hover:text-primary transition-colors">
                 <Mail className="h-4 w-4" />

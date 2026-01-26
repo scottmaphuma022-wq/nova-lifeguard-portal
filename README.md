@@ -10,5 +10,5 @@ This project is built with:
 - shadcn-ui
 - Tailwind CSS
 
-i want to intergrate supabase into my project.which files should i add to my project folder
+
 
