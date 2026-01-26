@@ -27,16 +27,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const { phone, amount, cover_id } = req.body;
-    if (!phone || !amount) return res.status(400).json({ error: 'Missing parameters' });
+    if (!phone || !amount || !cover_id) return res.status(400).json({ error: 'Missing parameters' });
 
     const token = await getAccessToken();
 
-    // Kenya time timestamp
     const timestamp = dayjs().tz('Africa/Nairobi').format('YYYYMMDDHHmmss');
-
-    const password = Buffer.from(
-      `${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${timestamp}`
-    ).toString('base64');
+    const password = Buffer.from(`${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${timestamp}`).toString('base64');
 
     const response = await axios.post(
       `${process.env.MPESA_BASE_URL}/mpesa/stkpush/v1/processrequest`,
@@ -57,8 +53,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     );
 
     return res.status(200).json(response.data);
-  } catch (error: any) {
-    console.error(error.response?.data || error.message);
-    return res.status(500).json({ error: 'STK Push failed', details: error.response?.data });
+  } catch (err: any) {
+    console.error('STK Push Error:', err.response?.data || err.message);
+    return res.status(500).json({ error: 'STK Push failed', details: err.response?.data || err.message });
   }
 }
