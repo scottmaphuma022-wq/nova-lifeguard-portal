@@ -9,36 +9,50 @@ const supabase = createClient(
 
 type MpesaRaw = any;
 
+/* ============================
+   SAFE PAYLOAD EXTRACTION
+============================ */
 function extractCallback(payload: MpesaRaw) {
   const cb =
-    payload?.Body?.stkCallback ?? payload?.body?.stkCallback ?? payload?.stkCallback ?? payload;
+    payload?.Body?.stkCallback ??
+    payload?.body?.stkCallback ??
+    payload?.stkCallback ??
+    payload;
 
-  const ResultCode = Number(cb?.ResultCode ?? cb?.resultCode ?? cb?.Result ?? -1);
-  const ResultDesc = cb?.ResultDesc ?? cb?.resultDesc ?? cb?.ResultDescription ?? "";
+  const ResultCode = Number(cb?.ResultCode ?? -1);
+  const ResultDesc = cb?.ResultDesc ?? "";
 
-  const CheckoutRequestID = cb?.CheckoutRequestID ?? cb?.checkoutRequestID ?? null;
-  const MerchantRequestID = cb?.MerchantRequestID ?? cb?.merchantRequestID ?? null;
+  const CheckoutRequestID: string | null =
+    cb?.CheckoutRequestID ?? null;
 
-  const items = cb?.CallbackMetadata?.Item ?? cb?.callbackMetadata?.Item ?? cb?.CallbackMetadata ?? [];
+  const MerchantRequestID: string | null =
+    cb?.MerchantRequestID ?? null;
+
+  const items =
+    cb?.CallbackMetadata?.Item ??
+    cb?.callbackMetadata?.Item ??
+    [];
 
   const findItem = (name: string) => {
-    if (!Array.isArray(items)) return undefined;
-    const it = items.find((x: any) => (x?.Name ?? x?.name) === name);
-    return it?.Value ?? it?.value;
+    if (!Array.isArray(items)) return null;
+    const it = items.find((i: any) => i?.Name === name);
+    return it?.Value ?? null;
   };
 
-  const Amount = Number(cb?.Amount ?? findItem("Amount") ?? 0);
-  const MpesaReceiptNumber = cb?.MpesaReceiptNumber ?? findItem("MpesaReceiptNumber") ?? findItem("ReceiptNumber") ?? null;
-  const PhoneNumber = cb?.PhoneNumber ?? findItem("PhoneNumber") ?? findItem("MSISDN") ?? null;
-  const TransactionDateRaw = cb?.TransactionDate ?? findItem("TransactionDate") ?? findItem("Transaction") ?? null;
+  const Amount = Number(findItem("Amount") ?? 0);
+  const MpesaReceiptNumber = findItem("MpesaReceiptNumber");
+  const PhoneNumber = findItem("PhoneNumber");
+  const TransactionDateRaw = findItem("TransactionDate");
 
   let TransactionDate: Date | null = null;
   if (typeof TransactionDateRaw === "string" && /^\d{14}$/.test(TransactionDateRaw)) {
     const t = TransactionDateRaw;
-    TransactionDate = new Date(`${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(8, 10)}:${t.slice(10, 12)}:${t.slice(12, 14)}Z`);
-  } else if (TransactionDateRaw) {
-    const d = new Date(TransactionDateRaw);
-    TransactionDate = isNaN(d.getTime()) ? null : d;
+    TransactionDate = new Date(
+      `${t.slice(0, 4)}-${t.slice(4, 6)}-${t.slice(6, 8)}T${t.slice(
+        8,
+        10
+      )}:${t.slice(10, 12)}:${t.slice(12, 14)}Z`
+    );
   }
 
   return {
@@ -54,64 +68,50 @@ function extractCallback(payload: MpesaRaw) {
   };
 }
 
+/* ============================
+   MAIN PROCESSOR
+============================ */
 async function processMpesaCallback(rawPayload: MpesaRaw) {
   const {
     CheckoutRequestID,
+    MerchantRequestID,
     ResultCode,
     ResultDesc,
     Amount,
     MpesaReceiptNumber,
-    PhoneNumber,
     TransactionDate,
     raw,
   } = extractCallback(rawPayload);
 
   if (!CheckoutRequestID) {
-    console.error("Missing CheckoutRequestID in callback:", rawPayload);
     throw new Error("Missing CheckoutRequestID");
   }
 
-  // 1️⃣ Fetch MPESA transaction
-  const { data: txRow, error: txError } = await supabase
+  /* ============================
+     FETCH MPESA TRANSACTION
+  ============================ */
+  const { data: tx, error: txError } = await supabase
     .from("mpesa_transactions")
     .select("*")
     .eq("checkout_request_id", CheckoutRequestID)
     .single();
 
-  if (txError || !txRow) {
-    console.error("MPESA transaction not found:", CheckoutRequestID, txError);
-    throw new Error("MPESA transaction not found");
+  if (txError || !tx) {
+    throw new Error("Mpesa transaction not found");
   }
 
-  // 2️⃣ Determine status
-  const status = ResultCode === 0 ? "success" : "failed";
-
-  let paymentId: string | null = null;
-
-  // 3️⃣ Create insurance payment if successful
-  if (status === "success") {
-    const { data: payment, error: paymentError } = await supabase
-      .from("payments")
-      .insert({
-        user_id: txRow.user_id,
-        cover_id: txRow.payment_id ? txRow.payment_id : txRow.id, // If we already know cover_id, adjust accordingly
-        plan_tier: txRow.transaction_type === "insurance_payment" ? txRow.transaction_type : "standard", // adapt as needed
-        amount_paid: Amount,
-        payment_status: "completed",
-        payment_date: TransactionDate ?? new Date(),
-      })
-      .select()
-      .single();
-
-    if (paymentError || !payment) {
-      console.error("Failed to create payment record:", paymentError);
-      throw paymentError || new Error("Failed to create payment record");
-    }
-
-    paymentId = payment.id;
+  /* ============================
+     IDEMPOTENCY CHECK
+  ============================ */
+  if (tx.transaction_status === "completed") {
+    return;
   }
 
-  // 4️⃣ Update MPESA transaction row
+  const status = ResultCode === 0 ? "completed" : "failed";
+
+  /* ============================
+     UPDATE MPESA TRANSACTION
+  ============================ */
   await supabase
     .from("mpesa_transactions")
     .update({
@@ -119,11 +119,26 @@ async function processMpesaCallback(rawPayload: MpesaRaw) {
       mpesa_receipt_number: MpesaReceiptNumber,
       merchant_request_id: MerchantRequestID,
       transaction_date: TransactionDate ?? new Date(),
-      payment_id: paymentId,
     })
-    .eq("id", txRow.id);
+    .eq("id", tx.id);
 
-  // 5️⃣ Optional: log callback
+  /* ============================
+     UPDATE PAYMENT RECORD
+  ============================ */
+  if (tx.payment_id) {
+    await supabase
+      .from("payments")
+      .update({
+        payment_status: status,
+        amount_paid: Amount,
+        payment_date: TransactionDate ?? new Date(),
+      })
+      .eq("id", tx.payment_id);
+  }
+
+  /* ============================
+     STORE CALLBACK (AUDIT)
+  ============================ */
   await supabase.from("mpesa_callbacks").insert({
     checkout_request_id: CheckoutRequestID,
     result_code: ResultCode,
@@ -132,19 +147,29 @@ async function processMpesaCallback(rawPayload: MpesaRaw) {
   });
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== "POST") return res.status(405).end();
+/* ============================
+   VERCEL HANDLER
+============================ */
+export default async function handler(
+  req: VercelRequest,
+  res: VercelResponse
+) {
+  if (req.method !== "POST") {
+    return res.status(405).end();
+  }
 
   try {
     await processMpesaCallback(req.body);
 
+    // SAFARICOM MUST ALWAYS RECEIVE 200
     return res.status(200).json({
       ResultCode: 0,
       ResultDesc: "Accepted",
     });
   } catch (err: any) {
-    console.error("MPESA CALLBACK ERROR:", err);
+    console.error("❌ MPESA CALLBACK ERROR:", err);
 
+    // Still return 200 to avoid retries storm
     return res.status(200).json({
       ResultCode: 1,
       ResultDesc: err?.message ?? "Failed",
