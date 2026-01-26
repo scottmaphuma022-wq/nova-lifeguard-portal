@@ -10,6 +10,9 @@ import { useToast } from '@/hooks/use-toast';
 import DashboardLayout from '@/components/DashboardLayout';
 import { supabase } from '@/lib/supabaseClient';
 
+/* ============================
+   TYPES
+============================= */
 interface Tier {
   id: string;
   name: string;
@@ -32,6 +35,9 @@ interface Payment {
   status: string;
 }
 
+/* ============================
+   ICON MAP
+============================= */
 const iconMap: Record<string, any> = {
   funeral: Heart,
   loan: Shield,
@@ -64,6 +70,9 @@ const CustomerPayments = () => {
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
+  /* ============================
+     FETCH PLANS
+  ============================= */
   const fetchPlans = async () => {
     const { data, error } = await supabase
       .from('covers')
@@ -94,8 +103,8 @@ const CustomerPayments = () => {
       }
 
       planMap[cover.cover_type].tiers.push({
-        id: cover.id,
-        name: cover.plan_tier,
+        id: cover.id,                  // cover_id (FK)
+        name: cover.plan_tier,         // enum value
         coverage: cover.cover_name,
         price: `KSH ${cover.price}`,
       });
@@ -104,6 +113,9 @@ const CustomerPayments = () => {
     setPlans(Object.values(planMap));
   };
 
+  /* ============================
+     FETCH PAYMENT HISTORY
+  ============================= */
   const fetchPayments = async () => {
     const { data: userData } = await supabase.auth.getUser();
     const user = userData?.user;
@@ -135,11 +147,14 @@ const CustomerPayments = () => {
     fetchPayments();
   }, []);
 
+  /* ============================
+     HANDLE STK PUSH
+  ============================= */
   const handlePayment = async () => {
     if (!selectedTier || !phone) {
       toast({
         title: 'Missing Details',
-        description: 'Please enter phone number',
+        description: 'Please select a plan and enter phone number',
         variant: 'destructive',
       });
       return;
@@ -148,10 +163,31 @@ const CustomerPayments = () => {
     setLoading(true);
 
     try {
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
+
+      if (!user) {
+        throw new Error('You must be logged in to make a payment');
+      }
+
       const normalizedPhone = normalizePhone(phone);
 
       const tier = plans.flatMap(p => p.tiers).find(t => t.id === selectedTier);
-      const amount = Number(tier?.price.replace('KSH ', ''));
+      if (!tier) throw new Error('Invalid plan tier selected');
+
+      const amount = Number(tier.price.replace('KSH ', ''));
+      if (isNaN(amount) || amount <= 0) {
+        throw new Error('Invalid payment amount');
+      }
+
+      /* 🔍 DEBUG LOG — SAFE TO REMOVE LATER */
+      console.log('STK PUSH PAYLOAD:', {
+        phone: normalizedPhone,
+        amount,
+        user_id: user.id,
+        cover_id: tier.id,
+        plan_tier: tier.name,
+      });
 
       const res = await fetch('/api/payments/stkpush', {
         method: 'POST',
@@ -159,17 +195,21 @@ const CustomerPayments = () => {
         body: JSON.stringify({
           phone: normalizedPhone,
           amount,
-          cover_id: selectedTier,
+          user_id: user.id,       // REQUIRED
+          cover_id: tier.id,      // FK → covers.id
+          plan_tier: tier.name,   // enum
         }),
       });
 
       const result = await res.json();
-      if (!res.ok) throw new Error(result.error);
+      if (!res.ok) throw new Error(result.error || 'STK push failed');
 
       toast({
         title: 'STK Push Sent',
         description: 'Confirm payment on your phone',
       });
+
+      setPhone('');
     } catch (err: any) {
       toast({
         title: 'Payment Failed',
@@ -181,6 +221,9 @@ const CustomerPayments = () => {
     }
   };
 
+  /* ============================
+     SELECTED DETAILS
+  ============================= */
   const details = (() => {
     if (!selectedPlan || !selectedTier) return null;
     const plan = plans.find(p => p.id === selectedPlan);
