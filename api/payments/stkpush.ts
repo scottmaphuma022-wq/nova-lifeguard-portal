@@ -1,81 +1,160 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-import axios from 'axios';
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc.js';
-import timezone from 'dayjs/plugin/timezone.js';
+// api/payments/stkpush.ts
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import axios from "axios";
+import dayjs from "dayjs";
+import { createClient } from "@supabase/supabase-js";
 
-dayjs.extend(utc);
-dayjs.extend(timezone);
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
+);
 
-const getAccessToken = async () => {
-  const auth = Buffer.from(
-    `${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`
-  ).toString('base64');
+const BASE_URL = process.env.MPESA_BASE_URL!;
+const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE!;
+const MPESA_PASSKEY = process.env.MPESA_PASSKEY!;
+const MPESA_CALLBACK_URL = process.env.MPESA_CALLBACK_URL!;
 
-  const res = await axios.get(
-    `${process.env.MPESA_BASE_URL}/oauth/v1/generate?grant_type=client_credentials`,
+async function getAccessToken() {
+  const { data } = await axios.get(
+    `${BASE_URL}/oauth/v1/generate?grant_type=client_credentials`,
     {
-      headers: { Authorization: `Basic ${auth}` },
+      auth: {
+        username: process.env.MPESA_CONSUMER_KEY!,
+        password: process.env.MPESA_CONSUMER_SECRET!,
+      },
     }
   );
+  return data.access_token;
+}
 
-  return res.data.access_token;
-};
-
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse
-) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== "POST") {
+    return res.status(405).json({
+      success: false,
+      message: "Method not allowed",
+    });
   }
 
   try {
-    const { phone, amount, cover_id } = req.body;
+    const { phone, amount, user_id, cover_id, plan_tier } = req.body;
 
-    if (!phone || !amount || !cover_id) {
-      return res.status(400).json({ error: 'Missing parameters' });
+    if (!phone || !amount || !user_id || !cover_id || !plan_tier) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields",
+      });
     }
 
-    // Normalize phone
-    let normalizedPhone = phone.replace(/\s+/g, '');
-    if (normalizedPhone.startsWith('07')) normalizedPhone = '254' + normalizedPhone.substring(1);
-    if (normalizedPhone.startsWith('01')) normalizedPhone = '254' + normalizedPhone.substring(1);
+    // Normalize Kenyan phone number
+    let normalizedPhone = String(phone).trim();
+    if (normalizedPhone.startsWith("0")) {
+      normalizedPhone = `254${normalizedPhone.slice(1)}`;
+    }
+    if (normalizedPhone.startsWith("+")) {
+      normalizedPhone = normalizedPhone.slice(1);
+    }
 
-    const token = await getAccessToken();
+    /**
+     * 1️⃣ IDEMPOTENCY CHECK
+     * Prevent duplicate MPESA transactions if request is sent twice
+     */
+    const { data: existing } = await supabase
+      .from("mpesa_transactions")
+      .select("*")
+      .eq("user_id", user_id)
+      .eq("amount", amount)
+      .eq("transaction_status", "initiated")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    // Timestamp in Nairobi timezone
-    const timestamp = dayjs().tz('Africa/Nairobi').format('YYYYMMDDHHmmss');
+    let transactionRow = existing;
+
+    /**
+     * 2️⃣ CREATE MPESA TRANSACTION ROW (ONLY IF NONE EXISTS)
+     */
+    if (!transactionRow) {
+      const { data, error } = await supabase
+        .from("mpesa_transactions")
+        .insert({
+          user_id,
+          phone_number: normalizedPhone,
+          amount: amount,
+          transaction_type: "insurance_payment",
+          transaction_status: "initiated",
+        })
+        .select()
+        .single();
+
+      if (error || !data) {
+        console.error("Failed to create MPESA transaction:", error);
+        throw error || new Error("Could not create MPESA transaction");
+      }
+
+      transactionRow = data;
+    }
+
+    console.log("Using MPESA transaction row:", transactionRow.id);
+
+    /**
+     * 3️⃣ GENERATE MPESA ACCESS TOKEN
+     */
+    const accessToken = await getAccessToken();
+
+    /**
+     * 4️⃣ PREPARE STK PUSH REQUEST
+     */
+    const timestamp = dayjs().format("YYYYMMDDHHmmss");
     const password = Buffer.from(
-      `${process.env.MPESA_SHORTCODE}${process.env.MPESA_PASSKEY}${timestamp}`
-    ).toString('base64');
+      `${MPESA_SHORTCODE}${MPESA_PASSKEY}${timestamp}`
+    ).toString("base64");
 
-    const response = await axios.post(
-      `${process.env.MPESA_BASE_URL}/mpesa/stkpush/v1/processrequest`,
+    const stkResponse = await axios.post(
+      `${BASE_URL}/mpesa/stkpush/v1/processrequest`,
       {
-        BusinessShortCode: process.env.MPESA_SHORTCODE,
+        BusinessShortCode: MPESA_SHORTCODE,
         Password: password,
         Timestamp: timestamp,
-        TransactionType: 'CustomerPayBillOnline',
-        Amount: amount,
+        TransactionType: "CustomerPayBillOnline",
+        Amount: Number(amount),
         PartyA: normalizedPhone,
-        PartyB: process.env.MPESA_SHORTCODE,
+        PartyB: MPESA_SHORTCODE,
         PhoneNumber: normalizedPhone,
-        CallBackURL: process.env.MPESA_CALLBACK_URL,
-        AccountReference: 'Insurance Payment',
-        TransactionDesc: 'Premium Payment',
+        CallBackURL: MPESA_CALLBACK_URL,
+        AccountReference: transactionRow.id,
+        TransactionDesc: "Insurance Payment",
       },
       {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
       }
     );
 
-    return res.status(200).json(response.data);
+    const checkoutRequestID = stkResponse.data.CheckoutRequestID;
+
+    /**
+     * 5️⃣ UPDATE TRANSACTION ROW WITH CHECKOUT REQUEST ID
+     */
+    await supabase
+      .from("mpesa_transactions")
+      .update({ checkout_request_id: checkoutRequestID })
+      .eq("id", transactionRow.id);
+
+    console.log("Updated MPESA transaction with CheckoutRequestID:", checkoutRequestID);
+
+    /**
+     * 6️⃣ RETURN RESPONSE TO FRONTEND
+     */
+    return res.status(200).json({
+      success: true,
+      checkoutRequestID,
+    });
   } catch (err: any) {
-    console.error('STK Push Error:', err.response?.data || err.message);
+    console.error("STK Push error:", err);
     return res.status(500).json({
-      error: 'STK Push failed',
-      details: err.response?.data || err.message,
+      success: false,
+      message: err.message,
     });
   }
 }
