@@ -1,59 +1,81 @@
-import { ReactNode } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+"use client";
+
+import { ReactNode, useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   FileText,
   CreditCard,
-  Bell,
   User,
   LogOut,
   Settings,
   ChevronDown,
   Menu,
   BarChart3,
-  Users,
-  Forward,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
-import Logo from '@/components/Logo';
-import { useAuth } from '@/contexts/AuthContext';
+} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import Logo from "@/components/Logo";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/lib/supabaseClient";
 
 interface AdminLayoutProps {
   children: ReactNode;
-  role: 'manager' | 'officer';
+  role: "manager" | "officer";
 }
 
 const managerNavItems = [
-  { name: 'Dashboard', href: '/novaportal/manager', icon: LayoutDashboard },
-  { name: 'Claims', href: '/novaportal/manager/claims', icon: FileText },
-  { name: 'Analytics', href: '/novaportal/manager/analytics', icon: BarChart3 },
-  { name: 'Settings', href: '/novaportal/manager/settings', icon: Settings },
+  { name: "Dashboard", href: "/novaportal/manager", icon: LayoutDashboard },
+  { name: "Claims", href: "/novaportal/manager/claims", icon: FileText },
+  { name: "Analytics", href: "/novaportal/manager/analytics", icon: BarChart3 },
+  { name: "Settings", href: "/novaportal/manager/settings", icon: Settings },
 ];
 
 const officerNavItems = [
-  { name: 'Dashboard', href: '/novaportal/officer', icon: LayoutDashboard },
-  { name: 'Claims', href: '/novaportal/officer/claims', icon: FileText },
-  { name: 'Payments', href: '/novaportal/officer/payments', icon: CreditCard },
+  { name: "Dashboard", href: "/novaportal/officer", icon: LayoutDashboard },
+  { name: "Claims", href: "/novaportal/officer/claims", icon: FileText },
+  { name: "Payments", href: "/novaportal/officer/payments", icon: CreditCard },
 ];
 
 const AdminLayout = ({ children, role }: AdminLayoutProps) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user } = useAuth(); // ✅ logout removed
 
-  const navItems = role === 'manager' ? managerNavItems : officerNavItems;
+  const [adminName, setAdminName] = useState<string>("Admin");
 
-  const handleLogout = () => {
-    logout();
-    navigate('/');
+  const navItems = role === "manager" ? managerNavItems : officerNavItems;
+
+  // 🔹 FETCH ADMIN NAME FROM SUPABASE
+  const fetchAdminProfile = async () => {
+    if (!user?.id) return;
+
+    const { data } = await supabase
+      .from("userprofile")
+      .select("username, role")
+      .eq("id", user.id)
+      .single();
+
+    if (data && (data.role === "manager" || data.role === "claims_officer")) {
+      setAdminName(data.username);
+    }
+  };
+
+  useEffect(() => {
+    fetchAdminProfile();
+  }, [user]);
+
+  // 🔹 LOGOUT (TERMINATE SESSION + REDIRECT)
+  const handleLogout = async () => {
+    await supabase.auth.signOut(); // terminate session
+    navigate("/novaportal"); // redirect
   };
 
   const isActive = (href: string) => location.pathname === href;
@@ -61,11 +83,11 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
       <div className="p-6 border-b border-border">
-        <Link to="/">
+        <Link to="/novaportal">
           <Logo size="md" />
         </Link>
         <div className="mt-4 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-xs font-medium inline-block">
-          {role === 'manager' ? 'Manager Portal' : 'Claims Officer Portal'}
+          {role === "manager" ? "Manager Portal" : "Claims Officer Portal"}
         </div>
       </div>
 
@@ -76,8 +98,8 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
             to={item.href}
             className={`flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${
               isActive(item.href)
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
           >
             <item.icon className="h-5 w-5" />
@@ -87,7 +109,11 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
       </nav>
 
       <div className="p-4 border-t border-border">
-        <Button variant="ghost" className="w-full justify-start text-muted-foreground" onClick={handleLogout}>
+        <Button
+          variant="ghost"
+          className="w-full justify-start text-muted-foreground"
+          onClick={handleLogout}
+        >
           <LogOut className="mr-3 h-5 w-5" />
           Logout
         </Button>
@@ -97,16 +123,17 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
 
   return (
     <div className="min-h-screen flex bg-muted/30">
-      {/* Desktop Sidebar */}
+      {/* Sidebar */}
       <aside className="hidden lg:flex w-64 bg-card border-r border-border flex-col">
         <SidebarContent />
       </aside>
 
-      {/* Main Content */}
+      {/* Main */}
       <div className="flex-1 flex flex-col">
         {/* Header */}
         <header className="sticky top-0 z-40 bg-background border-b border-border">
           <div className="flex h-16 items-center justify-between px-4 lg:px-6">
+
             {/* Mobile Menu */}
             <Sheet>
               <SheetTrigger asChild>
@@ -123,26 +150,21 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
               <Logo size="sm" />
             </div>
 
+            {/* USER MENU */}
             <div className="flex items-center gap-4">
-              {/* Notifications */}
-              <Button variant="ghost" size="icon" className="relative">
-                <Bell className="h-5 w-5" />
-                <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-primary text-[10px] font-bold text-primary-foreground flex items-center justify-center">
-                  5
-                </span>
-              </Button>
-
-              {/* User Menu */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="flex items-center gap-2">
                     <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
                       <User className="h-4 w-4 text-primary" />
                     </div>
-                    <span className="hidden sm:inline font-medium">{user?.name || 'Admin'}</span>
+                    <span className="hidden sm:inline font-medium">
+                      {adminName}
+                    </span>
                     <ChevronDown className="h-4 w-4 text-muted-foreground" />
                   </Button>
                 </DropdownMenuTrigger>
+
                 <DropdownMenuContent align="end" className="w-48">
                   <DropdownMenuItem>
                     <User className="mr-2 h-4 w-4" />
@@ -153,7 +175,10 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
                     Settings
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleLogout} className="text-destructive">
+                  <DropdownMenuItem
+                    onClick={handleLogout}
+                    className="text-destructive"
+                  >
                     <LogOut className="mr-2 h-4 w-4" />
                     Logout
                   </DropdownMenuItem>
@@ -163,7 +188,7 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
           </div>
         </header>
 
-        {/* Page Content */}
+        {/* Content */}
         <main className="flex-1 p-4 lg:p-6">{children}</main>
       </div>
     </div>

@@ -121,16 +121,18 @@ const CustomerPayments = () => {
     const user = userData?.user;
     if (!user) return;
 
-    const { data } = await supabase
-      .from('payments')
-      .select(`
-        amount_paid,
-        payment_date,
-        plan_tier,
-        cover:cover_id (cover_name)
-      `)
-      .eq('user_id', user.id)
-      .order('payment_date', { ascending: false });
+ const { data } = await supabase
+  .from('payments')
+  .select(`
+    amount_paid,
+    payment_date,
+    plan_tier,
+    payment_status,
+    cover:cover_id (cover_name)
+  `)
+  .eq('user_id', user.id)
+  .eq('payment_status', 'completed') // ✅ FILTER HERE (THIS IS THE KEY LINE)
+  .order('payment_date', { ascending: false });
 
     setPayments(
       data?.map((p: any) => ({

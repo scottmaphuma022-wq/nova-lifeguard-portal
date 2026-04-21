@@ -1,47 +1,77 @@
-import { ReactNode } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+"use client";
+
+import { ReactNode, useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   FileText,
   CreditCard,
-  Bell,
   User,
   LogOut,
   Settings,
   ChevronDown,
   Menu,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
-import Logo from '@/components/Logo';
-import ChatBot from '@/components/ChatBot';
-import { useAuth } from '@/contexts/AuthContext';
+} from "@/components/ui/dropdown-menu";
+import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import Logo from "@/components/Logo";
+import ChatBot from "@/components/ChatBot";
+import { useAuth } from "@/contexts/AuthContext";
+import { supabase } from "@/lib/supabaseClient";
 
 interface DashboardLayoutProps {
   children: ReactNode;
 }
 
 const navItems = [
-  { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Claims', href: '/claims', icon: FileText },
-  { name: 'Payments', href: '/payments', icon: CreditCard },
+  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { name: "Claims", href: "/claims", icon: FileText },
+  { name: "Payments", href: "/payments", icon: CreditCard },
 ];
 
 const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
 
-  const handleLogout = () => {
-    logout();
-    navigate('/');
+  const [username, setUsername] = useState("User");
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // 🔹 FETCH USERNAME FROM SUPABASE
+  const fetchProfile = async () => {
+    if (!user?.id) return;
+
+    const { data } = await supabase
+      .from("userprofile")
+      .select("username")
+      .eq("id", user.id)
+      .single();
+
+    if (data?.username) {
+      setUsername(data.username);
+    }
+  };
+
+  useEffect(() => {
+    fetchProfile();
+  }, [user]);
+
+  // 🔹 LOGOUT WITH UX LOADING
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+
+    await supabase.auth.signOut();
+
+    setTimeout(() => {
+      navigate("/");
+    }, 2000); // smooth 2s transition
   };
 
   const isActive = (href: string) => location.pathname === href;
@@ -61,8 +91,8 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
             to={item.href}
             className={`flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${
               isActive(item.href)
-                ? 'bg-primary text-primary-foreground'
-                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
           >
             <item.icon className="h-5 w-5" />
@@ -72,7 +102,11 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       </nav>
 
       <div className="p-4 border-t border-border">
-        <Button variant="ghost" className="w-full justify-start text-muted-foreground" onClick={handleLogout}>
+        <Button
+          variant="ghost"
+          className="w-full justify-start text-muted-foreground"
+          onClick={handleLogout}
+        >
           <LogOut className="mr-3 h-5 w-5" />
           Logout
         </Button>
@@ -82,12 +116,24 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
   return (
     <div className="min-h-screen flex bg-muted/30">
-      {/* Desktop Sidebar */}
+      {/* 🔹 LOGOUT LOADING OVERLAY */}
+      {isLoggingOut && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-4">
+            <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent" />
+            <p className="text-sm text-muted-foreground">
+              Logging out securely...
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Sidebar */}
       <aside className="hidden lg:flex w-64 bg-card border-r border-border flex-col">
         <SidebarContent />
       </aside>
 
-      {/* Main Content */}
+      {/* Main */}
       <div className="flex-1 flex flex-col">
         {/* Header */}
         <header className="sticky top-0 z-40 bg-background border-b border-border">
@@ -108,26 +154,21 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
               <Logo size="sm" />
             </div>
 
+            {/* User Menu */}
             <div className="flex items-center gap-4">
-              {/* Notifications */}
-              <Button variant="ghost" size="icon" className="relative">
-                <Bell className="h-5 w-5" />
-                <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-primary text-[10px] font-bold text-primary-foreground flex items-center justify-center">
-                  2
-                </span>
-              </Button>
-
-              {/* User Menu */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="flex items-center gap-2">
                     <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
                       <User className="h-4 w-4 text-primary" />
                     </div>
-                    <span className="hidden sm:inline font-medium">{user?.name || 'User'}</span>
+                    <span className="hidden sm:inline font-medium">
+                      {username}
+                    </span>
                     <ChevronDown className="h-4 w-4 text-muted-foreground" />
                   </Button>
                 </DropdownMenuTrigger>
+
                 <DropdownMenuContent align="end" className="w-48">
                   <DropdownMenuItem>
                     <User className="mr-2 h-4 w-4" />
@@ -138,7 +179,10 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                     Settings
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={handleLogout} className="text-destructive">
+                  <DropdownMenuItem
+                    onClick={handleLogout}
+                    className="text-destructive"
+                  >
                     <LogOut className="mr-2 h-4 w-4" />
                     Logout
                   </DropdownMenuItem>
@@ -148,7 +192,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           </div>
         </header>
 
-        {/* Page Content */}
+        {/* Content */}
         <main className="flex-1 p-4 lg:p-6">{children}</main>
       </div>
 

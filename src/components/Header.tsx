@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Menu, X, Bell, User, LogOut, Settings, ChevronDown } from 'lucide-react';
+import { Menu, X, User, LogOut, Settings, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -20,17 +20,6 @@ const Header = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, isAuthenticated, logout } = useAuth();
-
-  const navLinks = [
-    { name: 'Home', href: '/' },
-    { name: 'Insurance Covers', href: '/#covers' },
-  
-  ];
-
-  const isActive = (href: string) => {
-    if (href === '/') return location.pathname === '/';
-    return location.pathname.startsWith(href.replace('/#', '/'));
-  };
 
   const handleOpenAuth = (mode: 'login' | 'signup') => {
     setAuthMode(mode);
@@ -61,35 +50,10 @@ const Header = () => {
               <Logo size="md" />
             </Link>
 
-            {/* Desktop Navigation */}
-            <nav className="hidden md:flex items-center gap-1">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.name}
-                  to={link.href}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    isActive(link.href)
-                      ? 'bg-secondary text-primary'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                  }`}
-                >
-                  {link.name}
-                </Link>
-              ))}
-            </nav>
-
             {/* Desktop Auth Buttons / User Menu */}
             <div className="hidden md:flex items-center gap-3">
               {isAuthenticated && user ? (
                 <>
-                  {/* Notifications */}
-                  <Button variant="ghost" size="icon" className="relative">
-                    <Bell className="h-5 w-5" />
-                    <span className="absolute -top-1 -right-1 h-4 w-4 rounded-full bg-primary text-[10px] font-bold text-primary-foreground flex items-center justify-center">
-                      3
-                    </span>
-                  </Button>
-
                   {/* User Dropdown */}
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -146,22 +110,6 @@ const Header = () => {
         {mobileMenuOpen && (
           <div className="md:hidden border-t border-border bg-background animate-fade-in">
             <div className="container mx-auto px-4 py-4 space-y-4">
-              <nav className="flex flex-col gap-2">
-                {navLinks.map((link) => (
-                  <Link
-                    key={link.name}
-                    to={link.href}
-                    onClick={() => setMobileMenuOpen(false)}
-                    className={`px-4 py-3 rounded-lg font-medium transition-colors ${
-                      isActive(link.href)
-                        ? 'bg-secondary text-primary'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                    }`}
-                  >
-                    {link.name}
-                  </Link>
-                ))}
-              </nav>
               
               <div className="pt-4 border-t border-border space-y-2">
                 {isAuthenticated && user ? (
