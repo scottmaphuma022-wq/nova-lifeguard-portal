@@ -2,24 +2,42 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import fetch from 'node-fetch';
 
 // -----------------------------
-// OCR CALL (URL-BASED ✅)
+// FETCH WITH TIMEOUT ⏱️
+// -----------------------------
+const fetchWithTimeout = async (url: string, options: any, timeout = 5000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(id);
+  }
+};
+
+// -----------------------------
+// OCR CALL (URL)
 // -----------------------------
 const runOCR = async (imageUrl: string, apiKey: string) => {
   try {
-    const response = await fetch('https://api.optiic.dev/process', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+    const response = await fetchWithTimeout(
+      'https://api.optiic.dev/process',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: imageUrl }),
       },
-      body: JSON.stringify({
-        url: imageUrl, // ✅ correct input
-      }),
-    });
+      5000 // ⏱️ hard timeout
+    );
 
     const raw = await response.text();
-
-    console.log("🧾 OCR RAW:", raw);
 
     let parsed: any = null;
     try {
@@ -37,27 +55,10 @@ const runOCR = async (imageUrl: string, apiKey: string) => {
     return {
       ok: false,
       status: 500,
-      raw: err.message,
+      raw: err.name === 'AbortError' ? 'Timeout' : err.message,
       parsed: null,
     };
   }
-};
-
-// -----------------------------
-// OCR RETRY
-// -----------------------------
-const runOCRWithRetry = async (url: string, apiKey: string, retries = 3) => {
-  let last;
-
-  for (let i = 0; i < retries; i++) {
-    const res = await runOCR(url, apiKey);
-    if (res.ok && res.parsed) return res;
-
-    last = res;
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  return last;
 };
 
 // -----------------------------
@@ -69,8 +70,6 @@ const extractAllText = (ocr: any) => {
     ocr?.data?.text ||
     ocr?.result?.text ||
     ocr?.output?.text ||
-    ocr?.lines?.map((l: any) => l.text).join(' ') ||
-    ocr?.words?.map((w: any) => w.text).join(' ') ||
     '';
 
   return text
@@ -98,7 +97,7 @@ const extractNameCandidates = (text: string) => {
 };
 
 // -----------------------------
-// ID NUMBER EXTRACTION
+// ID NUMBER
 // -----------------------------
 const extractIdNumber = (text: string) => {
   const match = text.match(/\b\d{6,10}\b/);
@@ -106,17 +105,13 @@ const extractIdNumber = (text: string) => {
 };
 
 // -----------------------------
-// TOKEN-BASED SIMILARITY
+// SIMILARITY
 // -----------------------------
 const similarity = (a: string[], b: string[]) => {
-  const tokenize = (arr: string[]) =>
-    arr.flatMap(name => name.split(' '));
-
-  const tokensA = new Set(tokenize(a));
-  const tokensB = new Set(tokenize(b));
+  const tokensA = new Set(a.flatMap(n => n.split(' ')));
+  const tokensB = new Set(b.flatMap(n => n.split(' ')));
 
   let matchCount = 0;
-
   tokensA.forEach(t => {
     if (tokensB.has(t)) matchCount++;
   });
@@ -145,85 +140,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { imageUrls } = req.body;
 
-    debug.urlCount = imageUrls?.length;
-
-    if (!imageUrls || !Array.isArray(imageUrls)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Invalid imageUrls',
-        debug,
-      });
+    if (!Array.isArray(imageUrls)) {
+      return res.status(400).json({ success: false, error: 'Invalid imageUrls' });
     }
 
     const apiKey = process.env.OPTIC_OCR_API_KEY;
     if (!apiKey) {
-      return res.status(500).json({
-        success: false,
-        error: 'Missing OCR API key',
-        debug,
-      });
+      return res.status(500).json({ success: false, error: 'Missing OCR API key' });
     }
 
-    let results: any[] = [];
+    debug.step = 'parallel_ocr';
 
-    debug.step = 'processing_images';
+    // ✅ PARALLEL EXECUTION (KEY FIX)
+    const results = await Promise.all(
+      imageUrls.map(async (url: string, i: number) => {
+        const fileDebug: any = { index: i, url };
 
-    for (let i = 0; i < imageUrls.length; i++) {
-      const url = imageUrls[i];
-      const fileDebug: any = { index: i, url };
-
-      try {
-        const ocr = await runOCRWithRetry(url, apiKey);
+        const ocr = await runOCR(url, apiKey);
 
         fileDebug.ocrStatus = ocr.status;
-        fileDebug.ocrRaw = ocr.raw?.slice(0, 500);
+        fileDebug.ocrRaw = ocr.raw?.slice(0, 200);
 
         if (!ocr.ok || !ocr.parsed) {
-          results.push({
+          return {
             success: false,
             text: '',
             nameCandidates: [],
             idNumber: null,
             debug: fileDebug,
-          });
-          continue;
+          };
         }
 
         const text = extractAllText(ocr.parsed);
         const nameCandidates = extractNameCandidates(text);
         const idNumber = extractIdNumber(text);
 
-        fileDebug.extractedText = text.slice(0, 200);
-        fileDebug.nameCandidates = nameCandidates;
-        fileDebug.idNumber = idNumber;
+        fileDebug.text = text.slice(0, 100);
 
-        results.push({
+        return {
           success: true,
           text,
           nameCandidates,
           idNumber,
           debug: fileDebug,
-        });
-
-      } catch (err: any) {
-        fileDebug.error = err.message;
-
-        results.push({
-          success: false,
-          text: '',
-          nameCandidates: [],
-          idNumber: null,
-          debug: fileDebug,
-        });
-      }
-    }
+        };
+      })
+    );
 
     // -----------------------------
-    // NAME COMPARISON
+    // COMPARE
     // -----------------------------
     const allNames = results
       .map(r => r.nameCandidates)
-      .filter(arr => arr && arr.length > 0);
+      .filter(arr => arr.length > 0);
 
     let nameMatch = false;
     let comparisons: any[] = [];
@@ -232,49 +201,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const base = allNames[0];
 
       comparisons = allNames.slice(1).map(other => ({
-        base,
-        comparedWith: other,
         ...similarity(base, other),
       }));
 
       nameMatch = comparisons.every(c => c.match);
     }
 
-    // -----------------------------
-    // ID COMPARISON
-    // -----------------------------
     const ids = results.map(r => r.idNumber).filter(Boolean);
+    const idMatch = ids.length >= 2 && ids.every(id => id === ids[0]);
 
-    let idMatch = false;
-
-    if (ids.length >= 2) {
-      idMatch = ids.every(id => id === ids[0]);
-    }
-
-    // -----------------------------
-    // FINAL DECISION
-    // -----------------------------
     const finalMatch = nameMatch || idMatch;
-
-    debug.step = 'completed';
-    debug.allNames = allNames;
-    debug.comparisons = comparisons;
-    debug.idMatch = idMatch;
 
     return res.status(200).json({
       success: finalMatch,
-      message: finalMatch
-        ? 'Documents verified'
-        : 'Document mismatch detected',
+      message: finalMatch ? 'Documents verified' : 'Document mismatch detected',
       results,
-      debug,
+      debug: {
+        ...debug,
+        allNames,
+        comparisons,
+        idMatch,
+      },
     });
 
   } catch (err: any) {
     return res.status(500).json({
       success: false,
       error: err.message,
-      debug,
     });
   }
 }
