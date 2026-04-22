@@ -3,7 +3,7 @@ import fetch from 'node-fetch';
 import sharp from 'sharp';
 
 // -----------------------------
-// Normalize + COMPRESS Image (FIXED)
+// Normalize + COMPRESS Image
 // -----------------------------
 const normalizeImage = async (buffer: Buffer) => {
   const beforeSize = buffer.length;
@@ -11,11 +11,11 @@ const normalizeImage = async (buffer: Buffer) => {
   const compressed = await sharp(buffer)
     .rotate()
     .resize({
-      width: 1200, // 🔥 increased for better OCR accuracy
+      width: 1200,
       withoutEnlargement: true,
     })
     .jpeg({
-      quality: 65, // 🔥 less aggressive compression
+      quality: 65,
     })
     .toBuffer();
 
@@ -30,24 +30,10 @@ const normalizeImage = async (buffer: Buffer) => {
 };
 
 // -----------------------------
-// OCR CALL (FIXED PAYLOAD)
+// OCR CALL
 // -----------------------------
 const runOCR = async (buffer: Buffer, apiKey: string) => {
   const base64Image = buffer.toString('base64');
-
-  const payloadSizeKB = Buffer.byteLength(base64Image, 'utf8') / 1024;
-
-  console.log("📦 OCR Payload size KB:", payloadSizeKB.toFixed(2));
-
-  if (payloadSizeKB > 850) {
-    return {
-      ok: false,
-      status: 413,
-      raw: "Payload too large after compression",
-      parsed: null,
-      payloadSizeKB,
-    };
-  }
 
   try {
     const response = await fetch('https://api.optiic.dev/process', {
@@ -57,7 +43,6 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        // 🔥 FIXED FORMAT
         src: `data:image/jpeg;base64,${base64Image}`,
       }),
     });
@@ -67,16 +52,13 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
     let parsed: any = null;
     try {
       parsed = JSON.parse(raw);
-    } catch {
-      parsed = null;
-    }
+    } catch {}
 
     return {
       ok: response.ok,
       status: response.status,
-      raw: raw.slice(0, 2000),
+      raw,
       parsed,
-      payloadSizeKB,
     };
 
   } catch (err: any) {
@@ -85,13 +67,29 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
       status: 500,
       raw: err.message,
       parsed: null,
-      payloadSizeKB,
     };
   }
 };
 
 // -----------------------------
-// SAFE TEXT EXTRACTION (IMPROVED)
+// OCR RETRY (NEW)
+// -----------------------------
+const runOCRWithRetry = async (buffer: Buffer, apiKey: string, retries = 3) => {
+  let last;
+
+  for (let i = 0; i < retries; i++) {
+    const res = await runOCR(buffer, apiKey);
+    if (res.ok && res.parsed) return res;
+
+    last = res;
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  return last;
+};
+
+// -----------------------------
+// TEXT EXTRACTION
 // -----------------------------
 const extractAllText = (ocr: any) => {
   const text =
@@ -111,7 +109,7 @@ const extractAllText = (ocr: any) => {
 };
 
 // -----------------------------
-// EXTRACT NAME CANDIDATES (FILTERED)
+// NAME EXTRACTION
 // -----------------------------
 const STOP_WORDS = [
   'REPUBLIC', 'KENYA', 'IDENTITY', 'CARD',
@@ -128,22 +126,33 @@ const extractNameCandidates = (text: string) => {
 };
 
 // -----------------------------
-// SET-BASED SIMILARITY
+// ID NUMBER EXTRACTION (NEW)
+// -----------------------------
+const extractIdNumber = (text: string) => {
+  const match = text.match(/\b\d{6,10}\b/);
+  return match ? match[0] : null;
+};
+
+// -----------------------------
+// TOKEN-BASED SIMILARITY (FIXED)
 // -----------------------------
 const similarity = (a: string[], b: string[]) => {
-  const setA = new Set(a);
-  const setB = new Set(b);
+  const tokenize = (arr: string[]) =>
+    arr.flatMap(name => name.split(' '));
 
-  let intersection = 0;
+  const tokensA = new Set(tokenize(a));
+  const tokensB = new Set(tokenize(b));
 
-  setA.forEach(v => {
-    if (setB.has(v)) intersection++;
+  let matchCount = 0;
+
+  tokensA.forEach(t => {
+    if (tokensB.has(t)) matchCount++;
   });
 
-  const score = intersection / Math.max(setA.size, setB.size, 1);
+  const score = matchCount / Math.max(tokensA.size, tokensB.size, 1);
 
   return {
-    match: score >= 0.5,
+    match: score >= 0.6,
     confidence: Number(score.toFixed(3)),
   };
 };
@@ -187,9 +196,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     debug.step = 'processing_images';
 
-    // -----------------------------
-    // PROCESS IMAGES
-    // -----------------------------
     for (let i = 0; i < imageUrls.length; i++) {
       const url = imageUrls[i];
       const fileDebug: any = { index: i, url };
@@ -200,31 +206,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         const originalBuffer = Buffer.from(await response.arrayBuffer());
 
-        fileDebug.originalSizeKB = (originalBuffer.length / 1024).toFixed(2);
-
         const { buffer, meta } = await normalizeImage(originalBuffer);
         fileDebug.compression = meta;
 
-        const ocr = await runOCR(buffer, apiKey);
+        const ocr = await runOCRWithRetry(buffer, apiKey);
 
         fileDebug.ocrStatus = ocr.status;
-        fileDebug.ocrRaw = ocr.raw;
+        fileDebug.ocrRaw = ocr.raw?.slice(0, 500);
 
-        if (!ocr.ok) {
-          fileDebug.ocrError = ocr.raw;
-          throw new Error(`OCR failed (${ocr.status})`);
+        // 🔥 DO NOT FAIL — continue gracefully
+        if (!ocr.ok || !ocr.parsed) {
+          results.push({
+            success: false,
+            text: '',
+            nameCandidates: [],
+            idNumber: null,
+            debug: fileDebug,
+          });
+          continue;
         }
 
         const text = extractAllText(ocr.parsed);
-        fileDebug.extractedText = text.slice(0, 300);
-
         const nameCandidates = extractNameCandidates(text);
+        const idNumber = extractIdNumber(text);
+
+        fileDebug.extractedText = text.slice(0, 200);
         fileDebug.nameCandidates = nameCandidates;
+        fileDebug.idNumber = idNumber;
 
         results.push({
           success: true,
           text,
           nameCandidates,
+          idNumber,
           debug: fileDebug,
         });
 
@@ -233,66 +247,61 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
         results.push({
           success: false,
+          text: '',
+          nameCandidates: [],
+          idNumber: null,
           debug: fileDebug,
         });
       }
     }
 
     // -----------------------------
-    // FINAL COMPARISON
+    // NAME COMPARISON
     // -----------------------------
     const allNames = results
       .map(r => r.nameCandidates)
       .filter(arr => arr && arr.length > 0);
 
-    let allMatch = false;
+    let nameMatch = false;
     let comparisons: any[] = [];
 
-    // ✅ PRIMARY: name comparison
     if (allNames.length >= 2) {
       const base = allNames[0];
 
-      comparisons = allNames.slice(1).map((other) => ({
+      comparisons = allNames.slice(1).map(other => ({
         base,
         comparedWith: other,
         ...similarity(base, other),
       }));
 
-      allMatch = comparisons.every(c => c.match);
+      nameMatch = comparisons.every(c => c.match);
     }
 
-    // ✅ FALLBACK: text similarity if names fail
-    if (allNames.length < 2) {
-      const texts = results
-        .map(r => r.text)
-        .filter(t => t && t.length > 20);
+    // -----------------------------
+    // ID COMPARISON (STRONG SIGNAL)
+    // -----------------------------
+    const ids = results.map(r => r.idNumber).filter(Boolean);
 
-      if (texts.length >= 2) {
-        const base = texts[0];
+    let idMatch = false;
 
-        comparisons = texts.slice(1).map(t => {
-          const overlap =
-            base.split(' ').filter(w => t.includes(w)).length /
-            base.split(' ').length;
-
-          return {
-            match: overlap > 0.4,
-            confidence: Number(overlap.toFixed(3)),
-          };
-        });
-
-        allMatch = comparisons.every(c => c.match);
-      }
+    if (ids.length >= 2) {
+      idMatch = ids.every(id => id === ids[0]);
     }
+
+    // -----------------------------
+    // FINAL DECISION
+    // -----------------------------
+    const finalMatch = nameMatch || idMatch;
 
     debug.step = 'completed';
     debug.allNames = allNames;
     debug.comparisons = comparisons;
+    debug.idMatch = idMatch;
 
     return res.status(200).json({
-      success: allMatch,
-      message: allMatch
-        ? 'All documents verified successfully'
+      success: finalMatch,
+      message: finalMatch
+        ? 'Documents verified'
         : 'Document mismatch detected',
       results,
       debug,
