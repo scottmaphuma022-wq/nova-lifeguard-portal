@@ -15,7 +15,7 @@ const normalizeImage = async (buffer: Buffer) => {
       withoutEnlargement: true,
     })
     .jpeg({
-      quality: 65,
+      quality: 75, // 🔥 slightly higher for better OCR
     })
     .toBuffer();
 
@@ -30,7 +30,7 @@ const normalizeImage = async (buffer: Buffer) => {
 };
 
 // -----------------------------
-// OCR CALL
+// OCR CALL (FIXED)
 // -----------------------------
 const runOCR = async (buffer: Buffer, apiKey: string) => {
   const base64Image = buffer.toString('base64');
@@ -43,11 +43,13 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        src: `data:image/jpeg;base64,${base64Image}`,
+        image: base64Image, // ✅ correct field (no data:image prefix)
       }),
     });
 
     const raw = await response.text();
+
+    console.log("🧾 OCR RAW:", raw); // keep for debugging
 
     let parsed: any = null;
     try {
@@ -72,7 +74,7 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
 };
 
 // -----------------------------
-// OCR RETRY (NEW)
+// OCR RETRY
 // -----------------------------
 const runOCRWithRetry = async (buffer: Buffer, apiKey: string, retries = 3) => {
   let last;
@@ -126,7 +128,7 @@ const extractNameCandidates = (text: string) => {
 };
 
 // -----------------------------
-// ID NUMBER EXTRACTION (NEW)
+// ID NUMBER EXTRACTION
 // -----------------------------
 const extractIdNumber = (text: string) => {
   const match = text.match(/\b\d{6,10}\b/);
@@ -134,7 +136,7 @@ const extractIdNumber = (text: string) => {
 };
 
 // -----------------------------
-// TOKEN-BASED SIMILARITY (FIXED)
+// TOKEN-BASED SIMILARITY
 // -----------------------------
 const similarity = (a: string[], b: string[]) => {
   const tokenize = (arr: string[]) =>
@@ -214,7 +216,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fileDebug.ocrStatus = ocr.status;
         fileDebug.ocrRaw = ocr.raw?.slice(0, 500);
 
-        // 🔥 DO NOT FAIL — continue gracefully
         if (!ocr.ok || !ocr.parsed) {
           results.push({
             success: false,
@@ -255,9 +256,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // -----------------------------
-    // NAME COMPARISON
-    // -----------------------------
     const allNames = results
       .map(r => r.nameCandidates)
       .filter(arr => arr && arr.length > 0);
@@ -277,9 +275,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       nameMatch = comparisons.every(c => c.match);
     }
 
-    // -----------------------------
-    // ID COMPARISON (STRONG SIGNAL)
-    // -----------------------------
     const ids = results.map(r => r.idNumber).filter(Boolean);
 
     let idMatch = false;
@@ -288,9 +283,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       idMatch = ids.every(id => id === ids[0]);
     }
 
-    // -----------------------------
-    // FINAL DECISION
-    // -----------------------------
     const finalMatch = nameMatch || idMatch;
 
     debug.step = 'completed';
