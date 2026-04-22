@@ -1,83 +1,43 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import fetch from 'node-fetch';
+import vision from '@google-cloud/vision';
 
 // -----------------------------
-// FETCH WITH TIMEOUT ⏱️
+// INIT CLIENT (supports Vercel)
 // -----------------------------
-const fetchWithTimeout = async (url: string, options: any, timeout = 5000) => {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
+const client = new vision.ImageAnnotatorClient({
+  credentials: process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
+    ? JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON)
+    : undefined,
+});
 
+// -----------------------------
+// GOOGLE OCR
+// -----------------------------
+const runOCR = async (imageUrl: string) => {
   try {
-    const res = await fetch(url, {
-      ...options,
-      signal: controller.signal,
-    });
-    return res;
-  } finally {
-    clearTimeout(id);
-  }
-};
+    const [result] = await client.textDetection(imageUrl);
 
-// -----------------------------
-// OCR CALL (URL)
-// -----------------------------
-const runOCR = async (imageUrl: string, apiKey: string) => {
-  try {
-    const response = await fetchWithTimeout(
-      'https://api.optiic.dev/process',
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: imageUrl }),
-      },
-      5000 // ⏱️ hard timeout
-    );
-
-    const raw = await response.text();
-
-    let parsed: any = null;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {}
+    const text = result.fullTextAnnotation?.text || '';
 
     return {
-      ok: response.ok,
-      status: response.status,
-      raw,
-      parsed,
+      ok: true,
+      text,
     };
 
   } catch (err: any) {
     return {
       ok: false,
-      status: 500,
-      raw: err.name === 'AbortError' ? 'Timeout' : err.message,
-      parsed: null,
+      text: '',
+      error: err.message,
     };
   }
 };
 
 // -----------------------------
-// TEXT EXTRACTION
+// CLEAN TEXT
 // -----------------------------
-const extractAllText = (ocr: any) => {
-  const text =
-    ocr?.text ||
-    ocr?.data?.text ||
-    ocr?.result?.text ||
-    ocr?.output?.text ||
-    '';
-
-  return text
-    .replace(/\n/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toUpperCase();
-};
+const cleanText = (text: string) =>
+  text.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
 
 // -----------------------------
 // NAME EXTRACTION
@@ -88,18 +48,18 @@ const STOP_WORDS = [
   'BIRTH', 'PLACE', 'ISSUE'
 ];
 
-const extractNameCandidates = (text: string) => {
+const extractNames = (text: string) => {
   const matches = text.match(/[A-Z]{2,}(?:\s[A-Z]{2,}){1,3}/g) || [];
 
-  return matches.filter(name =>
-    !STOP_WORDS.some(word => name.includes(word))
+  return matches.filter(n =>
+    !STOP_WORDS.some(w => n.includes(w))
   );
 };
 
 // -----------------------------
 // ID NUMBER
 // -----------------------------
-const extractIdNumber = (text: string) => {
+const extractId = (text: string) => {
   const match = text.match(/\b\d{6,10}\b/);
   return match ? match[0] : null;
 };
@@ -118,71 +78,43 @@ const similarity = (a: string[], b: string[]) => {
 
   const score = matchCount / Math.max(tokensA.size, tokensB.size, 1);
 
-  return {
-    match: score >= 0.6,
-    confidence: Number(score.toFixed(3)),
-  };
+  return score >= 0.6;
 };
 
 // -----------------------------
 // HANDLER
 // -----------------------------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const debug: any = {
-    step: 'init',
-    time: new Date().toISOString(),
-  };
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed', debug });
-  }
-
   try {
     const { imageUrls } = req.body;
 
     if (!Array.isArray(imageUrls)) {
-      return res.status(400).json({ success: false, error: 'Invalid imageUrls' });
+      return res.status(400).json({ success: false });
     }
 
-    const apiKey = process.env.OPTIC_OCR_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({ success: false, error: 'Missing OCR API key' });
-    }
-
-    debug.step = 'parallel_ocr';
-
-    // ✅ PARALLEL EXECUTION (KEY FIX)
+    // ✅ PARALLEL OCR
     const results = await Promise.all(
-      imageUrls.map(async (url: string, i: number) => {
-        const fileDebug: any = { index: i, url };
+      imageUrls.map(async (url: string) => {
+        const ocr = await runOCR(url);
 
-        const ocr = await runOCR(url, apiKey);
-
-        fileDebug.ocrStatus = ocr.status;
-        fileDebug.ocrRaw = ocr.raw?.slice(0, 200);
-
-        if (!ocr.ok || !ocr.parsed) {
+        if (!ocr.ok) {
           return {
             success: false,
             text: '',
-            nameCandidates: [],
-            idNumber: null,
-            debug: fileDebug,
+            names: [],
+            id: null,
           };
         }
 
-        const text = extractAllText(ocr.parsed);
-        const nameCandidates = extractNameCandidates(text);
-        const idNumber = extractIdNumber(text);
-
-        fileDebug.text = text.slice(0, 100);
+        const text = cleanText(ocr.text);
+        const names = extractNames(text);
+        const id = extractId(text);
 
         return {
           success: true,
           text,
-          nameCandidates,
-          idNumber,
-          debug: fileDebug,
+          names,
+          id,
         };
       })
     );
@@ -190,38 +122,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // -----------------------------
     // COMPARE
     // -----------------------------
-    const allNames = results
-      .map(r => r.nameCandidates)
-      .filter(arr => arr.length > 0);
+    const allNames = results.map(r => r.names).filter(n => n.length > 0);
 
     let nameMatch = false;
-    let comparisons: any[] = [];
 
     if (allNames.length >= 2) {
       const base = allNames[0];
-
-      comparisons = allNames.slice(1).map(other => ({
-        ...similarity(base, other),
-      }));
-
-      nameMatch = comparisons.every(c => c.match);
+      nameMatch = allNames.slice(1).every(n => similarity(base, n));
     }
 
-    const ids = results.map(r => r.idNumber).filter(Boolean);
+    const ids = results.map(r => r.id).filter(Boolean);
     const idMatch = ids.length >= 2 && ids.every(id => id === ids[0]);
 
-    const finalMatch = nameMatch || idMatch;
+    const success = nameMatch || idMatch;
 
     return res.status(200).json({
-      success: finalMatch,
-      message: finalMatch ? 'Documents verified' : 'Document mismatch detected',
+      success,
+      message: success ? 'Documents verified' : 'Document mismatch',
       results,
-      debug: {
-        ...debug,
-        allNames,
-        comparisons,
-        idMatch,
-      },
     });
 
   } catch (err: any) {
