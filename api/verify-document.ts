@@ -3,15 +3,22 @@ import fetch from 'node-fetch';
 import sharp from 'sharp';
 
 // -----------------------------
-// Normalize Image
+// Normalize + COMPRESS Image 🔥
 // -----------------------------
 const normalizeImage = async (buffer: Buffer) => {
-  return await sharp(buffer)
-    .grayscale()
-    .normalize()
-    .sharpen()
-    .png()
+  const compressed = await sharp(buffer)
+    .rotate() // fix orientation
+    .resize({
+      width: 1000, // 🔥 limit size
+      withoutEnlargement: true,
+    })
+    .jpeg({
+      quality: 55, // 🔥 strong compression
+      chromaSubsampling: '4:2:0',
+    })
     .toBuffer();
+
+  return compressed;
 };
 
 // -----------------------------
@@ -143,13 +150,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       };
 
       try {
-        // 🔥 fetch image from URL
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to fetch image');
 
         let buffer = Buffer.from(await response.arrayBuffer());
 
+        // 🔥 COMPRESS IMAGE
         buffer = await normalizeImage(buffer);
+
+        // 🔥 SAFETY LIMIT (avoid payload errors)
+        if (buffer.length > 1.5 * 1024 * 1024) {
+          throw new Error('Image too large even after compression');
+        }
 
         const ocrData = await runOCR(buffer, apiKey);
         const text = (ocrData?.text || '').toLowerCase();
@@ -205,9 +217,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     debug.comparisons = comparisons;
     debug.matching = allMatch;
 
-    // -----------------------------
-    // FINAL RESPONSE
-    // -----------------------------
     return res.status(200).json({
       success: allMatch,
       message: allMatch
