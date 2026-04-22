@@ -183,34 +183,48 @@ const CustomerClaims = () => {
   };
 
   /* ------------------ OCR VERIFY ------------------ */
-  const verifyDocuments = async () => {
-    if (!validateDocs()) return false;
+const verifyDocuments = async () => {
+  if (!validateDocs()) return false;
 
-    setVerifying(true);
+  setVerifying(true);
 
-    try {
-      for (const key of Object.keys(files)) {
-        const formData = new FormData();
-        formData.append('file', files[key]);
+  try {
+    const formData = new FormData();
 
-        const res = await fetch('/api/verify-document', {
-          method: 'POST',
-          body: formData,
-        });
+    // 🔥 send ALL files at once
+    Object.entries(files).forEach(([docName, file]) => {
+      formData.append('files', file);       // backend expects "files"
+      formData.append('docNames', docName); // optional (for logging/validation)
+    });
 
-        const result = await res.json();
+    const res = await fetch('/api/verify-document', {
+      method: 'POST',
+      body: formData,
+    });
 
-        if (!result.success) throw new Error(key);
-      }
+    const result = await res.json();
 
-      setVerifying(false);
-      return true;
-    } catch (err) {
-      setVerifying(false);
-      toast({ title: 'Verification failed', variant: 'destructive' });
-      return false;
+    console.log("VERIFY RESPONSE:", result); // ✅ debugging
+
+    if (!result.success) {
+      throw new Error(result.error || 'Verification failed');
     }
-  };
+
+    setVerifying(false);
+    return true;
+
+  } catch (err: any) {
+    setVerifying(false);
+
+    toast({
+      title: 'Verification failed',
+      description: err.message || 'Unknown error',
+      variant: 'destructive',
+    });
+
+    return false;
+  }
+};
 
   /* ------------------ SUBMIT ------------------ */
   const submitClaim = async () => {
