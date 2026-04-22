@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import fs from 'fs';
+import fetch from 'node-fetch'; // ✅ ensure fetch works in all runtimes
 
 // 🚨 disable Next.js body parser
 export const config = {
@@ -17,7 +18,7 @@ const parseForm = (req: NextApiRequest) =>
     const form = formidable({
       multiples: false,
       keepExtensions: true,
-      maxFileSize: 10 * 1024 * 1024, // 10MB limit
+      maxFileSize: 10 * 1024 * 1024, // 10MB
     });
 
     form.parse(req, (err, fields, files) => {
@@ -37,43 +38,55 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { files } = await parseForm(req);
 
-    // flexible file extraction (array OR single)
+    console.log("FILES RECEIVED:", files);
+
+    // flexible extraction
     const uploaded = Array.isArray(files.file)
       ? files.file[0]
       : files.file;
 
     if (!uploaded) {
+      console.log("❌ No file field found");
       return res.status(400).json({
         success: false,
         error: 'No file uploaded',
       });
     }
 
-    // file validation
+    console.log("FILE INFO:", {
+      filepath: uploaded.filepath,
+      mimetype: uploaded.mimetype,
+      size: uploaded.size,
+    });
+
+    // read file
     const buffer = fs.readFileSync(uploaded.filepath);
 
     if (!buffer || buffer.length === 0) {
+      console.log("❌ Empty file buffer");
       return res.status(400).json({
         success: false,
         error: 'Empty file received',
       });
     }
 
-    // convert to base64 (most OCR APIs expect this more reliably than multipart)
+    console.log("✅ File read success. Size:", buffer.length);
+
+    // convert to base64
     const base64Image = buffer.toString('base64');
 
     const apiKey = process.env.OPTIC_OCR_API_KEY;
 
     if (!apiKey) {
+      console.log("❌ Missing OCR API key");
       return res.status(500).json({
         success: false,
         error: 'Missing OCR API key',
       });
     }
 
-    // -----------------------------
-    // Call Optiic OCR API
-    // -----------------------------
+    console.log("🚀 Sending OCR request...");
+
     const response = await fetch('https://api.optiic.dev/process', {
       method: 'POST',
       headers: {
@@ -87,11 +100,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const raw = await response.text();
 
-    // handle HTTP errors first
+    // 🔥 DEBUG LOGS (THIS IS WHAT YOU NEED)
+    console.log("🔍 OCR STATUS:", response.status);
+    console.log("🔍 OCR RAW RESPONSE:", raw);
+
+    // handle HTTP errors
     if (!response.ok) {
       return res.status(500).json({
         success: false,
         error: 'OCR API error',
+        status: response.status,
         details: raw,
       });
     }
@@ -100,7 +118,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let data: any;
     try {
       data = JSON.parse(raw);
-    } catch {
+    } catch (err) {
+      console.log("❌ JSON parse failed");
       return res.status(500).json({
         success: false,
         error: 'Invalid JSON from OCR API',
@@ -108,12 +127,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
+    console.log("✅ OCR SUCCESS");
+
     return res.status(200).json({
       success: true,
       text: data?.text || data,
     });
+
   } catch (err: any) {
-    console.error('OCR ERROR:', err);
+    console.error('💥 OCR ERROR:', err);
 
     return res.status(500).json({
       success: false,
