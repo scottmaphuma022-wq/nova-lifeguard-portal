@@ -1,40 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import fetch from 'node-fetch';
-import sharp from 'sharp';
 
 // -----------------------------
-// Normalize + COMPRESS Image
+// OCR CALL (URL-BASED ✅)
 // -----------------------------
-const normalizeImage = async (buffer: Buffer) => {
-  const beforeSize = buffer.length;
-
-  const compressed = await sharp(buffer)
-    .rotate()
-    .resize({
-      width: 1200,
-      withoutEnlargement: true,
-    })
-    .jpeg({
-      quality: 75, // 🔥 slightly higher for better OCR
-    })
-    .toBuffer();
-
-  return {
-    buffer: compressed,
-    meta: {
-      beforeKB: (beforeSize / 1024).toFixed(2),
-      afterKB: (compressed.length / 1024).toFixed(2),
-      reduction: `${((1 - compressed.length / beforeSize) * 100).toFixed(1)}%`,
-    },
-  };
-};
-
-// -----------------------------
-// OCR CALL (FIXED)
-// -----------------------------
-const runOCR = async (buffer: Buffer, apiKey: string) => {
-  const base64Image = buffer.toString('base64');
-
+const runOCR = async (imageUrl: string, apiKey: string) => {
   try {
     const response = await fetch('https://api.optiic.dev/process', {
       method: 'POST',
@@ -43,13 +13,13 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        image: base64Image, // ✅ correct field (no data:image prefix)
+        url: imageUrl, // ✅ correct input
       }),
     });
 
     const raw = await response.text();
 
-    console.log("🧾 OCR RAW:", raw); // keep for debugging
+    console.log("🧾 OCR RAW:", raw);
 
     let parsed: any = null;
     try {
@@ -76,11 +46,11 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
 // -----------------------------
 // OCR RETRY
 // -----------------------------
-const runOCRWithRetry = async (buffer: Buffer, apiKey: string, retries = 3) => {
+const runOCRWithRetry = async (url: string, apiKey: string, retries = 3) => {
   let last;
 
   for (let i = 0; i < retries; i++) {
-    const res = await runOCR(buffer, apiKey);
+    const res = await runOCR(url, apiKey);
     if (res.ok && res.parsed) return res;
 
     last = res;
@@ -203,15 +173,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const fileDebug: any = { index: i, url };
 
       try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Fetch failed ${response.status}`);
-
-        const originalBuffer = Buffer.from(await response.arrayBuffer());
-
-        const { buffer, meta } = await normalizeImage(originalBuffer);
-        fileDebug.compression = meta;
-
-        const ocr = await runOCRWithRetry(buffer, apiKey);
+        const ocr = await runOCRWithRetry(url, apiKey);
 
         fileDebug.ocrStatus = ocr.status;
         fileDebug.ocrRaw = ocr.raw?.slice(0, 500);
@@ -256,6 +218,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
+    // -----------------------------
+    // NAME COMPARISON
+    // -----------------------------
     const allNames = results
       .map(r => r.nameCandidates)
       .filter(arr => arr && arr.length > 0);
@@ -275,6 +240,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       nameMatch = comparisons.every(c => c.match);
     }
 
+    // -----------------------------
+    // ID COMPARISON
+    // -----------------------------
     const ids = results.map(r => r.idNumber).filter(Boolean);
 
     let idMatch = false;
@@ -283,6 +251,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       idMatch = ids.every(id => id === ids[0]);
     }
 
+    // -----------------------------
+    // FINAL DECISION
+    // -----------------------------
     const finalMatch = nameMatch || idMatch;
 
     debug.step = 'completed';
