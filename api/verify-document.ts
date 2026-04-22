@@ -11,11 +11,11 @@ const normalizeImage = async (buffer: Buffer) => {
   const compressed = await sharp(buffer)
     .rotate()
     .resize({
-      width: 700, // 🔥 even smaller for OCR safety
+      width: 650, // slightly smaller for OCR stability
       withoutEnlargement: true,
     })
     .jpeg({
-      quality: 35, // 🔥 very aggressive compression
+      quality: 30, // aggressive but stable
       chromaSubsampling: '4:2:0',
     })
     .toBuffer();
@@ -31,7 +31,7 @@ const normalizeImage = async (buffer: Buffer) => {
 };
 
 // -----------------------------
-// OCR CALL (ROBUST + DEBUG)
+// OCR CALL (HARDENED)
 // -----------------------------
 const runOCR = async (buffer: Buffer, apiKey: string) => {
   const base64Image = buffer.toString('base64');
@@ -40,12 +40,13 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
 
   console.log("📦 OCR Payload size KB:", payloadSizeKB.toFixed(2));
 
-  if (payloadSizeKB > 900) {
+  if (payloadSizeKB > 850) {
     return {
       ok: false,
       status: 413,
       raw: "Payload too large after compression",
       parsed: null,
+      payloadSizeKB,
     };
   }
 
@@ -73,7 +74,7 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
       status: response.status,
       raw: raw.slice(0, 2000),
       parsed,
-      payloadSizeKB: payloadSizeKB.toFixed(2),
+      payloadSizeKB,
     };
 
   } catch (err: any) {
@@ -82,43 +83,55 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
       status: 500,
       raw: err.message,
       parsed: null,
+      payloadSizeKB,
     };
   }
 };
 
 // -----------------------------
-// EXTRACT ALL TEXT (NOT JUST NAME)
+// SAFE TEXT EXTRACTION (FIXED)
 // -----------------------------
-const extractAllText = (text: string) => {
+const extractAllText = (ocr: any) => {
+  const text =
+    ocr?.text ||
+    ocr?.data?.text ||
+    ocr?.result?.text ||
+    ocr?.output?.text ||
+    '';
+
   return text
+    .replace(/\n/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    .toUpperCase();
 };
 
 // -----------------------------
-// SMART TEXT SIMILARITY (NEW CORE LOGIC)
+// EXTRACT NAME CANDIDATES (IMPORTANT FIX)
 // -----------------------------
-const textSimilarity = (a: string, b: string) => {
-  const A = a.toUpperCase();
-  const B = b.toUpperCase();
+const extractNameCandidates = (text: string) => {
+  const matches = text.match(/[A-Z]{2,}(?:\s[A-Z]{2,}){0,4}/g);
+  return matches || [];
+};
 
-  const wordsA = A.split(' ').filter(Boolean);
-  const wordsB = B.split(' ').filter(Boolean);
+// -----------------------------
+// SET-BASED SIMILARITY (ROBUST)
+// -----------------------------
+const similarity = (a: string[], b: string[]) => {
+  const setA = new Set(a);
+  const setB = new Set(b);
 
-  let matches = 0;
+  let intersection = 0;
 
-  wordsA.forEach(w => {
-    if (wordsB.includes(w)) matches++;
+  setA.forEach(v => {
+    if (setB.has(v)) intersection++;
   });
 
-  const score = Math.max(
-    matches / wordsA.length,
-    matches / wordsB.length
-  );
+  const score = intersection / Math.max(setA.size, setB.size, 1);
 
   return {
-    match: score >= 0.6,
-    confidence: score,
+    match: score >= 0.5,
+    confidence: Number(score.toFixed(3)),
   };
 };
 
@@ -161,6 +174,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     debug.step = 'processing_images';
 
+    // -----------------------------
+    // PROCESS IMAGES
+    // -----------------------------
     for (let i = 0; i < imageUrls.length; i++) {
       const url = imageUrls[i];
 
@@ -182,17 +198,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         fileDebug.ocrStatus = ocr.status;
         fileDebug.ocrRaw = ocr.raw;
 
-        if (!ocr.ok || !ocr.parsed) {
+        if (!ocr.ok) {
+          fileDebug.ocrError = ocr.raw;
           throw new Error(`OCR failed (${ocr.status})`);
         }
 
-        const text = extractAllText(ocr.parsed?.text || '');
+        const text = extractAllText(ocr.parsed);
 
         fileDebug.extractedText = text.slice(0, 300);
+
+        const nameCandidates = extractNameCandidates(text);
+        fileDebug.nameCandidates = nameCandidates;
 
         results.push({
           success: true,
           text,
+          nameCandidates,
           debug: fileDebug,
         });
 
@@ -207,33 +228,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // -----------------------------
-    // FINAL BULLETPROOF COMPARISON
+    // FINAL COMPARISON (FIXED CORE LOGIC)
     // -----------------------------
-    const texts = results.map(r => r.text).filter(Boolean);
+    const allNames = results
+      .map(r => r.nameCandidates)
+      .filter(arr => arr && arr.length > 0);
 
     let allMatch = false;
     let comparisons: any[] = [];
 
-    if (texts.length >= 2) {
-      const base = texts[0];
+    if (allNames.length >= 2) {
+      const base = allNames[0];
 
-      comparisons = texts.slice(1).map(t => ({
+      comparisons = allNames.slice(1).map((other) => ({
         base,
-        comparedWith: t,
-        ...textSimilarity(base, t),
+        comparedWith: other,
+        ...similarity(base, other),
       }));
 
       allMatch = comparisons.every(c => c.match);
     }
 
     debug.step = 'completed';
-    debug.texts = texts;
+    debug.allNames = allNames;
     debug.comparisons = comparisons;
 
     return res.status(200).json({
       success: allMatch,
       message: allMatch
-        ? 'All documents match (text verified)'
+        ? 'All documents verified successfully'
         : 'Document mismatch detected',
       results,
       debug,
