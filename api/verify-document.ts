@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import fs from 'fs';
 import fetch from 'node-fetch';
+import sharp from 'sharp'; // ✅ better image processing
 import { createCanvas } from 'canvas';
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 
@@ -30,15 +31,13 @@ const parseForm = (req: NextApiRequest) =>
   });
 
 // -----------------------------
-// PDF → IMAGE (PDF.js)
+// PDF → IMAGE (fallback only)
 // -----------------------------
 const convertPdfToImage = async (filepath: string) => {
-  console.log("📄 Converting PDF using PDF.js...");
-
   const data = new Uint8Array(fs.readFileSync(filepath));
 
   const pdf = await pdfjsLib.getDocument({ data }).promise;
-  const page = await pdf.getPage(1); // first page
+  const page = await pdf.getPage(1);
 
   const viewport = page.getViewport({ scale: 2 });
 
@@ -50,11 +49,19 @@ const convertPdfToImage = async (filepath: string) => {
     viewport,
   }).promise;
 
-  const buffer = canvas.toBuffer('image/png');
+  return canvas.toBuffer('image/png');
+};
 
-  console.log("✅ PDF converted (PDF.js)");
-
-  return buffer;
+// -----------------------------
+// Normalize Image for OCR 🔥
+// -----------------------------
+const normalizeImage = async (buffer: Buffer) => {
+  return await sharp(buffer)
+    .grayscale()
+    .normalize()
+    .sharpen()
+    .png()
+    .toBuffer();
 };
 
 // -----------------------------
@@ -66,63 +73,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const { files } = await parseForm(req);
-
-    console.log("FILES RECEIVED:", files);
+    const { fields, files } = await parseForm(req);
 
     const uploaded = Array.isArray(files.file)
       ? files.file[0]
       : files.file;
 
+    const docType = fields?.docType || 'unknown';
+
     if (!uploaded) {
-      console.log("❌ No file field found");
       return res.status(400).json({
         success: false,
         error: 'No file uploaded',
       });
     }
 
-    console.log("FILE INFO:", {
-      filepath: uploaded.filepath,
-      mimetype: uploaded.mimetype,
-      size: uploaded.size,
-    });
-
     let buffer: Buffer;
 
     // -----------------------------
-    // HANDLE PDF vs IMAGE
+    // HANDLE FILE TYPE
     // -----------------------------
     if (uploaded.mimetype === 'application/pdf') {
+      // fallback (frontend should already convert)
       buffer = await convertPdfToImage(uploaded.filepath);
     } else {
       buffer = fs.readFileSync(uploaded.filepath);
     }
 
     if (!buffer || buffer.length === 0) {
-      console.log("❌ Empty file buffer");
       return res.status(400).json({
         success: false,
         error: 'Empty file received',
       });
     }
 
-    console.log("✅ File ready for OCR. Size:", buffer.length);
+    // -----------------------------
+    // Normalize for OCR 🔥
+    // -----------------------------
+    buffer = await normalizeImage(buffer);
 
     const base64Image = buffer.toString('base64');
 
     const apiKey = process.env.OPTIC_OCR_API_KEY;
 
     if (!apiKey) {
-      console.log("❌ Missing OCR API key");
       return res.status(500).json({
         success: false,
         error: 'Missing OCR API key',
       });
     }
 
-    console.log("🚀 Sending OCR request...");
-
+    // -----------------------------
+    // OCR REQUEST
+    // -----------------------------
     const response = await fetch('https://api.optiic.dev/process', {
       method: 'POST',
       headers: {
@@ -135,9 +138,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const raw = await response.text();
-
-    console.log("🔍 OCR STATUS:", response.status);
-    console.log("🔍 OCR RAW RESPONSE:", raw);
 
     if (!response.ok) {
       return res.status(500).json({
@@ -152,7 +152,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     try {
       data = JSON.parse(raw);
     } catch {
-      console.log("❌ JSON parse failed");
       return res.status(500).json({
         success: false,
         error: 'Invalid JSON from OCR API',
@@ -160,11 +159,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    console.log("✅ OCR SUCCESS");
+    const text = (data?.text || '').toLowerCase();
 
+    // -----------------------------
+    // BASIC VALIDATION 🔥
+    // -----------------------------
+    let valid = true;
+
+    if (docType.toLowerCase().includes('id')) {
+      // basic ID check (very simple)
+      if (!text.includes('id') && !text.includes('republic')) {
+        valid = false;
+      }
+    }
+
+    if (docType.toLowerCase().includes('certificate')) {
+      if (!text.includes('certificate')) {
+        valid = false;
+      }
+    }
+
+    // -----------------------------
+    // RESPONSE
+    // -----------------------------
     return res.status(200).json({
-      success: true,
-      text: data?.text || data,
+      success: valid,
+      extractedText: text,
+      docType,
     });
 
   } catch (err: any) {
