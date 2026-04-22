@@ -1,27 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { FileText, CheckCircle, XCircle, Forward, Eye, Search, Filter } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
+  Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import AdminLayout from '@/components/AdminLayout';
+import { supabase } from '@/lib/supabaseClient';
 
 interface Claim {
   id: string;
+  dbId: string;
   customer: string;
   email: string;
   type: string;
@@ -32,21 +26,6 @@ interface Claim {
   documents: string[];
 }
 
-const allClaims: Claim[] = [
-  { id: 'CLM-156', customer: 'Alice Wanjiku', email: 'alice@email.com', type: 'Funeral Expenses', amount: 'KSH 250,000', status: 'Pending', date: '2024-01-25', description: 'Funeral expenses for parent', documents: ['death_cert.pdf', 'id_copy.pdf'] },
-  { id: 'CLM-155', customer: 'James Odhiambo', email: 'james@email.com', type: 'Loan Guard', amount: 'KSH 500,000', status: 'Approved', date: '2024-01-24', description: 'Outstanding mortgage loan', documents: ['loan_statement.pdf'] },
-  { id: 'CLM-154', customer: 'Mary Muthoni', email: 'mary@email.com', type: 'Disability', amount: 'KSH 180,000', status: 'Under Review', date: '2024-01-24', description: 'Permanent disability from accident', documents: ['medical_report.pdf', 'id_copy.pdf'] },
-  { id: 'CLM-153', customer: 'Peter Kamau', email: 'peter@email.com', type: 'Funeral Expenses', amount: 'KSH 120,000', status: 'Pending', date: '2024-01-23', description: 'Burial expenses', documents: ['death_cert.pdf'] },
-  { id: 'CLM-152', customer: 'Grace Akinyi', email: 'grace@email.com', type: 'Loan Guard', amount: 'KSH 350,000', status: 'Rejected', date: '2024-01-22', description: 'Car loan protection', documents: ['loan_docs.pdf'] },
-  { id: 'CLM-151', customer: 'David Mutua', email: 'david@email.com', type: 'Disability', amount: 'KSH 200,000', status: 'Pending', date: '2024-01-21', description: 'Work-related disability', documents: ['medical.pdf', 'employer_letter.pdf'] },
-];
-
-const officers = [
-  { id: 1, name: 'Sarah Claims' },
-  { id: 2, name: 'John Processor' },
-  { id: 3, name: 'Jane Handler' },
-];
-
 const statusColors: Record<string, string> = {
   Approved: 'bg-success/10 text-success',
   Pending: 'bg-warning/10 text-warning',
@@ -54,34 +33,104 @@ const statusColors: Record<string, string> = {
   Rejected: 'bg-destructive/10 text-destructive',
 };
 
+const PAGE_SIZE = 6;
+
 const ManagerClaims = () => {
-  const [claims, setClaims] = useState(allClaims);
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [officers, setOfficers] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [isForwardDialogOpen, setIsForwardDialogOpen] = useState(false);
   const [selectedOfficer, setSelectedOfficer] = useState('');
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+
   const { toast } = useToast();
 
+  useEffect(() => {
+    fetchClaims();
+    fetchOfficers();
+  }, [page]);
+
+  const formatStatus = (s: string) => {
+    if (s === 'approved') return 'Approved';
+    if (s === 'pending') return 'Pending';
+    if (s === 'rejected') return 'Rejected';
+    if (s === 'under_review') return 'Under Review';
+    return s;
+  };
+
+  const fetchClaims = async () => {
+    const from = (page - 1) * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+
+    const { data, count } = await supabase
+      .from('claims')
+      .select(`
+  *,
+  userprofile!claims_user_id_fkey(username,email)
+`, { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (!data) return;
+
+    const mapped = data.map((c: any) => ({
+      id: c.claim_number,
+      dbId: c.id,
+      customer: c.userprofile?.username || 'Unknown',
+      email: c.userprofile?.email || '',
+      type: c.claim_reason,
+      amount: `KSH ${Number(c.claim_amount).toLocaleString()}`,
+      status: formatStatus(c.claim_status),
+      date: new Date(c.created_at).toISOString().split('T')[0],
+      description: c.claim_reason,
+      documents: c.documents || [],
+    }));
+
+    setClaims(mapped);
+    setTotalPages(Math.ceil((count || 0) / PAGE_SIZE));
+  };
+
+  const fetchOfficers = async () => {
+    const { data } = await supabase
+      .from('userprofile')
+      .select('id, username')
+      .eq('role', 'claims_officer');
+
+    setOfficers(data || []);
+  };
+
   const filteredClaims = claims.filter((claim) => {
-    const matchesSearch = 
+    const matchesSearch =
       claim.id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       claim.customer.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = statusFilter === 'all' || claim.status === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
-  const handleApprove = (claim: Claim) => {
-    setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Approved' as const } : c));
+  const handleApprove = async (claim: Claim) => {
+    await supabase.from('claims')
+      .update({ claim_status: 'approved' })
+      .eq('id', claim.dbId);
+
+    fetchClaims();
+
     toast({
       title: 'Claim Approved',
       description: `Claim ${claim.id} has been approved successfully.`,
     });
   };
 
-  const handleReject = (claim: Claim) => {
-    setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Rejected' as const } : c));
+  const handleReject = async (claim: Claim) => {
+    await supabase.from('claims')
+      .update({ claim_status: 'rejected' })
+      .eq('id', claim.dbId);
+
+    fetchClaims();
+
     toast({
       title: 'Claim Rejected',
       description: `Claim ${claim.id} has been rejected.`,
@@ -89,217 +138,172 @@ const ManagerClaims = () => {
     });
   };
 
-  const handleForward = () => {
+  const handleForward = async () => {
     if (!selectedOfficer || !selectedClaim) return;
-    
+
+    await supabase.from('claims')
+      .update({ officer_id: selectedOfficer })
+      .eq('id', selectedClaim.dbId);
+
     toast({
       title: 'Claim Forwarded',
-      description: `Claim ${selectedClaim.id} has been assigned to ${officers.find(o => o.id.toString() === selectedOfficer)?.name}.`,
+      description: `Claim ${selectedClaim.id} assigned successfully.`,
     });
+
     setIsForwardDialogOpen(false);
     setSelectedOfficer('');
+    fetchClaims();
+  };
+
+  const getPublicUrl = (path: string) => {
+    const { data } = supabase.storage
+      .from('claim-document')
+      .getPublicUrl(path);
+    return data.publicUrl;
   };
 
   return (
     <AdminLayout role="manager">
       <div className="space-y-6">
-        {/* Header */}
+
+        {/* HEADER */}
         <div>
           <h1 className="text-2xl lg:text-3xl font-bold">Claims Management</h1>
           <p className="text-muted-foreground">Review, approve, or reject customer claims</p>
         </div>
 
-        {/* Filters */}
+        {/* FILTERS */}
         <Card className="border-0 shadow-card">
-          <CardContent className="p-4">
-            <div className="flex flex-col sm:flex-row gap-4">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by ID or customer name..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-              <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-full sm:w-48">
-                  <Filter className="h-4 w-4 mr-2" />
-                  <SelectValue placeholder="Filter by status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="Pending">Pending</SelectItem>
-                  <SelectItem value="Under Review">Under Review</SelectItem>
-                  <SelectItem value="Approved">Approved</SelectItem>
-                  <SelectItem value="Rejected">Rejected</SelectItem>
-                </SelectContent>
-              </Select>
+          <CardContent className="p-4 flex gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
             </div>
+
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-48">
+                <Filter className="h-4 w-4 mr-2" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="Pending">Pending</SelectItem>
+                <SelectItem value="Approved">Approved</SelectItem>
+                <SelectItem value="Rejected">Rejected</SelectItem>
+              </SelectContent>
+            </Select>
           </CardContent>
         </Card>
 
-        {/* Claims Table */}
+        {/* TABLE */}
         <Card className="border-0 shadow-card">
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-border bg-muted/50">
-                    <th className="text-left py-4 px-4 text-sm font-medium text-muted-foreground">Claim ID</th>
-                    <th className="text-left py-4 px-4 text-sm font-medium text-muted-foreground">Customer</th>
-                    <th className="text-left py-4 px-4 text-sm font-medium text-muted-foreground">Type</th>
-                    <th className="text-left py-4 px-4 text-sm font-medium text-muted-foreground">Amount</th>
-                    <th className="text-left py-4 px-4 text-sm font-medium text-muted-foreground">Status</th>
-                    <th className="text-left py-4 px-4 text-sm font-medium text-muted-foreground">Date</th>
-                    <th className="text-left py-4 px-4 text-sm font-medium text-muted-foreground">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredClaims.map((claim) => (
-                    <tr key={claim.id} className="border-b border-border/50 hover:bg-muted/30">
-                      <td className="py-4 px-4 font-medium">{claim.id}</td>
-                      <td className="py-4 px-4">
-                        <div>
-                          <p className="font-medium">{claim.customer}</p>
-                          <p className="text-sm text-muted-foreground">{claim.email}</p>
-                        </div>
-                      </td>
-                      <td className="py-4 px-4">{claim.type}</td>
-                      <td className="py-4 px-4 font-semibold">{claim.amount}</td>
-                      <td className="py-4 px-4">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${statusColors[claim.status]}`}>
-                          {claim.status}
-                        </span>
-                      </td>
-                      <td className="py-4 px-4 text-muted-foreground">{claim.date}</td>
-                      <td className="py-4 px-4">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => { setSelectedClaim(claim); setIsViewDialogOpen(true); }}
-                          >
-                            <Eye className="h-4 w-4" />
+            <table className="w-full">
+              <tbody>
+                {filteredClaims.map((claim) => (
+                  <tr key={claim.id} className="border-b hover:bg-muted/30">
+                    <td className="p-4">{claim.id}</td>
+                    <td className="p-4">{claim.customer}</td>
+                    <td className="p-4">{claim.type}</td>
+                    <td className="p-4">{claim.amount}</td>
+                    <td className="p-4">
+                      <span className={`px-2 py-1 rounded ${statusColors[claim.status]}`}>
+                        {claim.status}
+                      </span>
+                    </td>
+                    <td className="p-4">{claim.date}</td>
+                    <td className="p-4 flex gap-2">
+
+                      <Button size="icon" variant="ghost"
+                        onClick={() => { setSelectedClaim(claim); setIsViewDialogOpen(true); }}>
+                        <Eye className="h-4 w-4" />
+                      </Button>
+
+                      {claim.status === 'Pending' && (
+                        <>
+                          <Button size="icon" variant="ghost" onClick={() => handleApprove(claim)}>
+                            <CheckCircle className="h-4 w-4 text-success" />
                           </Button>
-                          {claim.status === 'Pending' && (
-                            <>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="text-success hover:text-success"
-                                onClick={() => handleApprove(claim)}
-                              >
-                                <CheckCircle className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="text-destructive hover:text-destructive"
-                                onClick={() => handleReject(claim)}
-                              >
-                                <XCircle className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => { setSelectedClaim(claim); setIsForwardDialogOpen(true); }}
-                              >
-                                <Forward className="h-4 w-4" />
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+
+                          <Button size="icon" variant="ghost" onClick={() => handleReject(claim)}>
+                            <XCircle className="h-4 w-4 text-destructive" />
+                          </Button>
+
+                          <Button size="icon" variant="ghost"
+                            onClick={() => { setSelectedClaim(claim); setIsForwardDialogOpen(true); }}>
+                            <Forward className="h-4 w-4" />
+                          </Button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* PAGINATION */}
+            <div className="flex justify-end gap-2 p-4">
+              <Button disabled={page === 1} onClick={() => setPage(p => p - 1)}>Prev</Button>
+              <span>Page {page} / {totalPages}</span>
+              <Button disabled={page === totalPages} onClick={() => setPage(p => p + 1)}>Next</Button>
             </div>
+
           </CardContent>
         </Card>
       </div>
 
-      {/* View Claim Dialog */}
+      {/* VIEW DIALOG */}
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent>
           <DialogHeader>
-            <DialogTitle>Claim Details - {selectedClaim?.id}</DialogTitle>
-            <DialogDescription>Review the claim information and documents</DialogDescription>
+            <DialogTitle>{selectedClaim?.id}</DialogTitle>
           </DialogHeader>
+
           {selectedClaim && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Customer</p>
-                  <p className="font-medium">{selectedClaim.customer}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Email</p>
-                  <p className="font-medium">{selectedClaim.email}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Type</p>
-                  <p className="font-medium">{selectedClaim.type}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Amount</p>
-                  <p className="font-semibold text-primary">{selectedClaim.amount}</p>
-                </div>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">Description</p>
-                <p className="font-medium">{selectedClaim.description}</p>
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground mb-2">Documents</p>
-                <div className="flex flex-wrap gap-2">
-                  {selectedClaim.documents.map((doc) => (
-                    <span key={doc} className="px-3 py-1.5 rounded-lg bg-muted text-sm flex items-center gap-2">
-                      <FileText className="h-4 w-4" />
-                      {doc}
-                    </span>
-                  ))}
-                </div>
+            <div className="space-y-3">
+              <p>{selectedClaim.description}</p>
+
+              <div className="flex flex-wrap gap-2">
+                {selectedClaim.documents.map((doc) => (
+                  <a
+                    key={doc}
+                    href={getPublicUrl(doc)}
+                    target="_blank"
+                    className="px-3 py-1 bg-muted rounded flex items-center gap-2"
+                  >
+                    <FileText className="h-4 w-4" />
+                    View Document
+                  </a>
+                ))}
               </div>
             </div>
           )}
         </DialogContent>
       </Dialog>
 
-      {/* Forward Claim Dialog */}
+      {/* FORWARD DIALOG */}
       <Dialog open={isForwardDialogOpen} onOpenChange={setIsForwardDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Forward Claim</DialogTitle>
-            <DialogDescription>
-              Assign claim {selectedClaim?.id} to a claims officer for processing
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <Select value={selectedOfficer} onValueChange={setSelectedOfficer}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select claims officer" />
-              </SelectTrigger>
-              <SelectContent>
-                {officers.map((officer) => (
-                  <SelectItem key={officer.id} value={officer.id.toString()}>
-                    {officer.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="flex gap-3">
-              <Button variant="outline" className="flex-1" onClick={() => setIsForwardDialogOpen(false)}>
-                Cancel
-              </Button>
-              <Button className="flex-1" onClick={handleForward} disabled={!selectedOfficer}>
-                Forward Claim
-              </Button>
-            </div>
-          </div>
+        <DialogContent>
+          <Select value={selectedOfficer} onValueChange={setSelectedOfficer}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select officer" />
+            </SelectTrigger>
+            <SelectContent>
+              {officers.map((o) => (
+                <SelectItem key={o.id} value={o.id}>{o.username}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Button onClick={handleForward}>Forward</Button>
         </DialogContent>
       </Dialog>
+
     </AdminLayout>
   );
 };

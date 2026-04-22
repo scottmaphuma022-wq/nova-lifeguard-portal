@@ -3,21 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import AdminLayout from '@/components/AdminLayout';
 import { useNavigate } from 'react-router-dom';
-
-const stats = [
-  { title: 'Total Claims', value: '156', icon: FileText, trend: '+12 this week', color: 'primary' },
-  { title: 'Approved', value: '89', icon: CheckCircle, trend: '+5 today', color: 'success' },
-  { title: 'Pending', value: '42', icon: Clock, trend: '8 urgent', color: 'warning' },
-  { title: 'Rejected', value: '25', icon: XCircle, trend: '-3 vs last week', color: 'destructive' },
-];
-
-const recentClaims = [
-  { id: 'CLM-156', customer: 'Alice Wanjiku', type: 'Funeral Expenses', amount: 'KSH 250,000', status: 'Pending', date: '2024-01-25' },
-  { id: 'CLM-155', customer: 'James Odhiambo', type: 'Loan Guard', amount: 'KSH 500,000', status: 'Approved', date: '2024-01-24' },
-  { id: 'CLM-154', customer: 'Mary Muthoni', type: 'Disability', amount: 'KSH 180,000', status: 'Under Review', date: '2024-01-24' },
-  { id: 'CLM-153', customer: 'Peter Kamau', type: 'Funeral Expenses', amount: 'KSH 120,000', status: 'Pending', date: '2024-01-23' },
-  { id: 'CLM-152', customer: 'Grace Akinyi', type: 'Loan Guard', amount: 'KSH 350,000', status: 'Rejected', date: '2024-01-22' },
-];
+import { useEffect, useState } from 'react';
+import { supabase } from '@/lib/supabaseClient';
 
 const statusColors: Record<string, string> = {
   Approved: 'bg-success/10 text-success',
@@ -26,8 +13,113 @@ const statusColors: Record<string, string> = {
   Rejected: 'bg-destructive/10 text-destructive',
 };
 
+const PAGE_SIZE = 5;
+
 const ManagerDashboard = () => {
   const navigate = useNavigate();
+
+  const [stats, setStats] = useState<any[]>([]);
+  const [recentClaims, setRecentClaims] = useState<any[]>([]);
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    fetchDashboardData(page);
+  }, [page]);
+
+  const formatStatus = (status: string) => {
+    switch (status) {
+      case 'approved':
+        return 'Approved';
+      case 'pending':
+        return 'Pending';
+      case 'rejected':
+        return 'Rejected';
+      case 'under_review':
+        return 'Under Review';
+      default:
+        return status;
+    }
+  };
+
+  const fetchDashboardData = async (currentPage: number) => {
+    try {
+      // PAGINATED QUERY
+      const from = (currentPage - 1) * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
+
+      const { data: claims, error, count } = await supabase
+        .from('claims')
+       .select(`
+  *,
+  userprofile!claims_user_id_fkey(username,email)
+`, { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+
+      // STATS (still global, not paginated)
+      const { data: allClaims } = await supabase
+        .from('claims')
+        .select('claim_status');
+
+      const total = allClaims?.length || 0;
+      const approved = allClaims?.filter(c => c.claim_status === 'approved').length || 0;
+      const pending = allClaims?.filter(c => c.claim_status === 'pending').length || 0;
+      const rejected = allClaims?.filter(c => c.claim_status === 'rejected').length || 0;
+
+      setStats([
+        {
+          title: 'Total Claims',
+          value: total,
+          icon: FileText,
+          trend: '',
+          color: 'primary',
+        },
+        {
+          title: 'Approved',
+          value: approved,
+          icon: CheckCircle,
+          trend: '',
+          color: 'success',
+        },
+        {
+          title: 'Pending',
+          value: pending,
+          icon: Clock,
+          trend: '',
+          color: 'warning',
+        },
+        {
+          title: 'Rejected',
+          value: rejected,
+          icon: XCircle,
+          trend: '',
+          color: 'destructive',
+        },
+      ]);
+
+      // FORMAT (UNCHANGED STRUCTURE)
+      const formatted = claims.map((c) => ({
+        id: c.claim_number,
+        customer: c.userprofile?.username || 'Unknown',
+        type: c.claim_reason,
+        amount: `KSH ${Number(c.claim_amount).toLocaleString()}`,
+        status: formatStatus(c.claim_status),
+        date: new Date(c.created_at).toISOString().split('T')[0],
+      }));
+
+      setRecentClaims(formatted);
+
+      // store total pages if needed later
+      setTotalPages(Math.ceil((count || 0) / PAGE_SIZE));
+
+    } catch (err) {
+      console.error('Dashboard error:', err);
+    }
+  };
+
+  const [totalPages, setTotalPages] = useState(1);
 
   return (
     <AdminLayout role="manager">
@@ -105,12 +197,36 @@ const ManagerDashboard = () => {
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Controls (minimal, no UI disruption) */}
+            <div className="flex justify-end gap-2 mt-4">
+              <Button
+                variant="outline"
+                disabled={page === 1}
+                onClick={() => setPage(prev => prev - 1)}
+              >
+                Previous
+              </Button>
+              <span className="flex items-center text-sm text-muted-foreground">
+                Page {page} of {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                disabled={page === totalPages}
+                onClick={() => setPage(prev => prev + 1)}
+              >
+                Next
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
         {/* Quick Actions */}
         <div className="grid gap-4 md:grid-cols-2">
-          <Card className="border-0 shadow-card hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/novaportal/manager/analytics')}>
+          <Card
+            className="border-0 shadow-card hover:shadow-lg transition-shadow cursor-pointer"
+            onClick={() => navigate('/novaportal/manager/analytics')}
+          >
             <CardContent className="flex items-center gap-4 p-6">
               <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
                 <TrendingUp className="h-6 w-6 text-primary" />
@@ -121,7 +237,11 @@ const ManagerDashboard = () => {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-0 shadow-card hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/novaportal/manager/settings')}>
+
+          <Card
+            className="border-0 shadow-card hover:shadow-lg transition-shadow cursor-pointer"
+            onClick={() => navigate('/novaportal/manager/settings')}
+          >
             <CardContent className="flex items-center gap-4 p-6">
               <div className="w-12 h-12 rounded-xl bg-info/10 flex items-center justify-center">
                 <Users className="h-6 w-6 text-info" />
