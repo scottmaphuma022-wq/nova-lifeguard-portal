@@ -1,7 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import fs from 'fs';
-import fetch from 'node-fetch'; // ✅ ensure fetch works in all runtimes
+import fetch from 'node-fetch';
+import { fromPath } from 'pdf2pic';
 
 // 🚨 disable Next.js body parser
 export const config = {
@@ -26,6 +27,29 @@ const parseForm = (req: NextApiRequest) =>
       else resolve({ fields, files });
     });
   });
+
+// -----------------------------
+// PDF → IMAGE CONVERTER
+// -----------------------------
+const convertPdfToImage = async (filepath: string) => {
+  console.log("📄 Converting PDF to image...");
+
+  const convert = fromPath(filepath, {
+    density: 100,
+    saveFilename: "converted",
+    savePath: "/tmp",
+    format: "png",
+    width: 800,
+    height: 1000,
+  });
+
+  const page = await convert(1); // first page only
+
+  console.log("✅ PDF converted:", page.path);
+
+  const imageBuffer = fs.readFileSync(page.path);
+  return imageBuffer;
+};
 
 // -----------------------------
 // Handler
@@ -59,8 +83,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       size: uploaded.size,
     });
 
-    // read file
-    const buffer = fs.readFileSync(uploaded.filepath);
+    let buffer: Buffer;
+
+    // -----------------------------
+    // HANDLE PDF vs IMAGE
+    // -----------------------------
+    if (uploaded.mimetype === 'application/pdf') {
+      buffer = await convertPdfToImage(uploaded.filepath);
+    } else {
+      buffer = fs.readFileSync(uploaded.filepath);
+    }
 
     if (!buffer || buffer.length === 0) {
       console.log("❌ Empty file buffer");
@@ -70,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    console.log("✅ File read success. Size:", buffer.length);
+    console.log("✅ File ready for OCR. Size:", buffer.length);
 
     // convert to base64
     const base64Image = buffer.toString('base64');
@@ -100,11 +132,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const raw = await response.text();
 
-    // 🔥 DEBUG LOGS (THIS IS WHAT YOU NEED)
+    // 🔥 DEBUG LOGS
     console.log("🔍 OCR STATUS:", response.status);
     console.log("🔍 OCR RAW RESPONSE:", raw);
 
-    // handle HTTP errors
     if (!response.ok) {
       return res.status(500).json({
         success: false,
@@ -114,7 +145,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // safe JSON parsing
     let data: any;
     try {
       data = JSON.parse(raw);
