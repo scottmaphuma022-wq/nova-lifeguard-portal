@@ -184,47 +184,74 @@ const CustomerClaims = () => {
 
   /* ------------------ OCR VERIFY ------------------ */
 const verifyDocuments = async () => {
-  if (!validateDocs()) return false;
+if (!validateDocs()) return false;
 
-  setVerifying(true);
+setVerifying(true);
 
-  try {
-    const formData = new FormData();
+try {
+const { data: { user } } = await supabase.auth.getUser();
+if (!user) throw new Error("User not authenticated");
 
-    // 🔥 send ALL files at once
-    Object.entries(files).forEach(([docName, file]) => {
-      formData.append('files', file);       // backend expects "files"
-      formData.append('docNames', docName); // optional (for logging/validation)
-    });
 
-    const res = await fetch('/api/verify-document', {
-      method: 'POST',
-      body: formData,
-    });
+let uploadedUrls: string[] = [];
 
-    const result = await res.json();
+// 🔥 Upload FIRST to Supabase Storage
+for (const key of Object.keys(files)) {
+  const file = files[key];
+  const path = `${user.id}/verification/${Date.now()}-${file.name}`;
 
-    console.log("VERIFY RESPONSE:", result); // ✅ debugging
+  const { error: uploadError } = await supabase
+    .storage
+    .from('claim-documents')
+    .upload(path, file);
 
-    if (!result.success) {
-      throw new Error(result.error || 'Verification failed');
-    }
+  if (uploadError) throw uploadError;
 
-    setVerifying(false);
-    return true;
+  const { data } = supabase
+    .storage
+    .from('claim-documents')
+    .getPublicUrl(path);
 
-  } catch (err: any) {
-    setVerifying(false);
+  uploadedUrls.push(data.publicUrl);
+}
 
-    toast({
-      title: 'Verification failed',
-      description: err.message || 'Unknown error',
-      variant: 'destructive',
-    });
+console.log("UPLOADED URLS:", uploadedUrls);
 
-    return false;
-  }
+// 🔥 Send ONLY URLs to API
+const res = await fetch('/api/verify-document', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ imageUrls: uploadedUrls }),
+});
+
+const result = await res.json();
+
+console.log("VERIFY RESPONSE:", result);
+
+if (!result.success) {
+  throw new Error(result.error || 'Verification failed');
+}
+
+setVerifying(false);
+return true;
+
+
+} catch (err: any) {
+setVerifying(false);
+
+
+toast({
+  title: 'Verification failed',
+  description: err.message || 'Unknown error',
+  variant: 'destructive',
+});
+
+return false;
+
+
+}
 };
+
 
   /* ------------------ SUBMIT ------------------ */
   const submitClaim = async () => {

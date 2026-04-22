@@ -1,32 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import formidable from 'formidable';
-import fs from 'fs';
 import fetch from 'node-fetch';
 import sharp from 'sharp';
-
-// 🚨 disable Next.js body parser
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
-// -----------------------------
-// Parse FormData (MULTIPLE FILES)
-// -----------------------------
-const parseForm = (req: NextApiRequest) =>
-  new Promise<{ fields: any; files: any }>((resolve, reject) => {
-    const form = formidable({
-      multiples: true, // ✅ IMPORTANT
-      keepExtensions: true,
-      maxFileSize: 10 * 1024 * 1024,
-    });
-
-    form.parse(req, (err, fields, files) => {
-      if (err) reject(err);
-      else resolve({ fields, files });
-    });
-  });
 
 // -----------------------------
 // Normalize Image
@@ -88,7 +62,7 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
 const normalizeName = (name: string) => {
   return name
     .toUpperCase()
-    .replace(/[^A-Z\s]/g, '') // remove noise
+    .replace(/[^A-Z\s]/g, '')
     .split(' ')
     .filter(Boolean);
 };
@@ -114,7 +88,7 @@ const compareNames = (nameA: string, nameB: string) => {
   const confidence = Math.max(scoreA, scoreB);
 
   return {
-    match: confidence >= 0.6, // 🔥 threshold (tunable)
+    match: confidence >= 0.6,
     confidence,
     tokensA,
     tokensB,
@@ -122,7 +96,7 @@ const compareNames = (nameA: string, nameB: string) => {
 };
 
 // -----------------------------
-// Handler
+// Handler (URL BASED)
 // -----------------------------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   let debug: any = { step: 'init' };
@@ -132,23 +106,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    debug.step = 'parse_form';
+    debug.step = 'read_body';
 
-    const { files } = await parseForm(req);
+    const { imageUrls } = req.body;
 
-    if (!files || !files.file) {
+    if (!imageUrls || !Array.isArray(imageUrls) || imageUrls.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'No files uploaded',
+        error: 'No image URLs provided',
         debug,
       });
     }
 
-    const uploadedFiles = Array.isArray(files.file)
-      ? files.file
-      : [files.file];
-
-    debug.totalFiles = uploadedFiles.length;
+    debug.totalFiles = imageUrls.length;
 
     const apiKey = process.env.OPTIC_OCR_API_KEY;
     if (!apiKey) {
@@ -162,28 +132,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let results: any[] = [];
 
     // -----------------------------
-    // PROCESS EACH FILE
+    // PROCESS EACH IMAGE URL
     // -----------------------------
-    for (let i = 0; i < uploadedFiles.length; i++) {
-      const file = uploadedFiles[i];
+    for (let i = 0; i < imageUrls.length; i++) {
+      const url = imageUrls[i];
 
       let fileDebug: any = {
         index: i,
-        mimetype: file.mimetype,
-        size: file.size,
+        url,
       };
 
-      if (!file.mimetype?.startsWith('image/')) {
-        fileDebug.error = 'invalid_type';
-        results.push({ success: false, debug: fileDebug });
-        continue;
-      }
-
-      let buffer = fs.readFileSync(file.filepath);
-
-      buffer = await normalizeImage(buffer);
-
       try {
+        // 🔥 fetch image from URL
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to fetch image');
+
+        let buffer = Buffer.from(await response.arrayBuffer());
+
+        buffer = await normalizeImage(buffer);
+
         const ocrData = await runOCR(buffer, apiKey);
         const text = (ocrData?.text || '').toLowerCase();
 
