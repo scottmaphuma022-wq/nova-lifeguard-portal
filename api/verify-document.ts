@@ -2,9 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import fs from 'fs';
 import fetch from 'node-fetch';
-import sharp from 'sharp'; // ✅ better image processing
-import { createCanvas } from 'canvas';
-import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
+import sharp from 'sharp'; // ✅ image optimization
 
 // 🚨 disable Next.js body parser
 export const config = {
@@ -29,28 +27,6 @@ const parseForm = (req: NextApiRequest) =>
       else resolve({ fields, files });
     });
   });
-
-// -----------------------------
-// PDF → IMAGE (fallback only)
-// -----------------------------
-const convertPdfToImage = async (filepath: string) => {
-  const data = new Uint8Array(fs.readFileSync(filepath));
-
-  const pdf = await pdfjsLib.getDocument({ data }).promise;
-  const page = await pdf.getPage(1);
-
-  const viewport = page.getViewport({ scale: 2 });
-
-  const canvas = createCanvas(viewport.width, viewport.height);
-  const context = canvas.getContext('2d');
-
-  await page.render({
-    canvasContext: context as any,
-    viewport,
-  }).promise;
-
-  return canvas.toBuffer('image/png');
-};
 
 // -----------------------------
 // Normalize Image for OCR 🔥
@@ -88,17 +64,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    let buffer: Buffer;
-
     // -----------------------------
-    // HANDLE FILE TYPE
+    // ONLY ALLOW IMAGES ✅
     // -----------------------------
-    if (uploaded.mimetype === 'application/pdf') {
-      // fallback (frontend should already convert)
-      buffer = await convertPdfToImage(uploaded.filepath);
-    } else {
-      buffer = fs.readFileSync(uploaded.filepath);
+    if (!uploaded.mimetype?.startsWith('image/')) {
+      return res.status(400).json({
+        success: false,
+        error: 'Only image uploads are allowed. Convert PDF before upload.',
+      });
     }
+
+    let buffer: Buffer = fs.readFileSync(uploaded.filepath);
 
     if (!buffer || buffer.length === 0) {
       return res.status(400).json({
@@ -167,7 +143,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let valid = true;
 
     if (docType.toLowerCase().includes('id')) {
-      // basic ID check (very simple)
       if (!text.includes('id') && !text.includes('republic')) {
         valid = false;
       }
