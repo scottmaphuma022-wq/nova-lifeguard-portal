@@ -2,7 +2,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import formidable from 'formidable';
 import fs from 'fs';
 import fetch from 'node-fetch';
-import { fromPath } from 'pdf2pic';
+import { createCanvas } from 'canvas';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 
 // 🚨 disable Next.js body parser
 export const config = {
@@ -19,7 +20,7 @@ const parseForm = (req: NextApiRequest) =>
     const form = formidable({
       multiples: false,
       keepExtensions: true,
-      maxFileSize: 10 * 1024 * 1024, // 10MB
+      maxFileSize: 10 * 1024 * 1024,
     });
 
     form.parse(req, (err, fields, files) => {
@@ -29,26 +30,31 @@ const parseForm = (req: NextApiRequest) =>
   });
 
 // -----------------------------
-// PDF → IMAGE CONVERTER
+// PDF → IMAGE (PDF.js)
 // -----------------------------
 const convertPdfToImage = async (filepath: string) => {
-  console.log("📄 Converting PDF to image...");
+  console.log("📄 Converting PDF using PDF.js...");
 
-  const convert = fromPath(filepath, {
-    density: 100,
-    saveFilename: "converted",
-    savePath: "/tmp",
-    format: "png",
-    width: 800,
-    height: 1000,
-  });
+  const data = new Uint8Array(fs.readFileSync(filepath));
 
-  const page = await convert(1); // first page only
+  const pdf = await pdfjsLib.getDocument({ data }).promise;
+  const page = await pdf.getPage(1); // first page
 
-  console.log("✅ PDF converted:", page.path);
+  const viewport = page.getViewport({ scale: 2 });
 
-  const imageBuffer = fs.readFileSync(page.path);
-  return imageBuffer;
+  const canvas = createCanvas(viewport.width, viewport.height);
+  const context = canvas.getContext('2d');
+
+  await page.render({
+    canvasContext: context as any,
+    viewport,
+  }).promise;
+
+  const buffer = canvas.toBuffer('image/png');
+
+  console.log("✅ PDF converted (PDF.js)");
+
+  return buffer;
 };
 
 // -----------------------------
@@ -64,7 +70,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log("FILES RECEIVED:", files);
 
-    // flexible extraction
     const uploaded = Array.isArray(files.file)
       ? files.file[0]
       : files.file;
@@ -104,7 +109,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log("✅ File ready for OCR. Size:", buffer.length);
 
-    // convert to base64
     const base64Image = buffer.toString('base64');
 
     const apiKey = process.env.OPTIC_OCR_API_KEY;
@@ -132,7 +136,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const raw = await response.text();
 
-    // 🔥 DEBUG LOGS
     console.log("🔍 OCR STATUS:", response.status);
     console.log("🔍 OCR RAW RESPONSE:", raw);
 
@@ -148,7 +151,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let data: any;
     try {
       data = JSON.parse(raw);
-    } catch (err) {
+    } catch {
       console.log("❌ JSON parse failed");
       return res.status(500).json({
         success: false,
