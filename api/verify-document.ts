@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import vision from '@google-cloud/vision';
 
 // -----------------------------
-// INIT CLIENT (supports Vercel)
+// INIT CLIENT (Vercel-safe)
 // -----------------------------
 const client = new vision.ImageAnnotatorClient({
   credentials: process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
@@ -11,20 +11,20 @@ const client = new vision.ImageAnnotatorClient({
 });
 
 // -----------------------------
-// GOOGLE OCR
+// GOOGLE OCR (DOCUMENT MODE 🔥)
 // -----------------------------
 const runOCR = async (imageUrl: string) => {
   try {
-    const [result] = await client.textDetection(imageUrl);
+    const [result] = await client.documentTextDetection(imageUrl);
 
-    const text = result.fullTextAnnotation?.text || '';
+    const fullText = result.fullTextAnnotation?.text || '';
 
     return {
       ok: true,
-      text,
+      text: fullText,
     };
-
   } catch (err: any) {
+    console.error('❌ OCR ERROR:', err.message);
     return {
       ok: false,
       text: '',
@@ -37,54 +37,113 @@ const runOCR = async (imageUrl: string) => {
 // CLEAN TEXT
 // -----------------------------
 const cleanText = (text: string) =>
-  text.replace(/\n/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+  text.replace(/\r/g, '').replace(/\t/g, '');
 
 // -----------------------------
-// NAME EXTRACTION
+// 🔥 KENYAN ID FIELD EXTRACTION
 // -----------------------------
-const STOP_WORDS = [
-  'REPUBLIC', 'KENYA', 'IDENTITY', 'CARD',
-  'NATIONAL', 'ID', 'NUMBER', 'SEX', 'DATE',
-  'BIRTH', 'PLACE', 'ISSUE'
-];
+const extractKenyanIDFields = (raw: string) => {
+  const text = raw.toUpperCase();
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
-const extractNames = (text: string) => {
-  const matches = text.match(/[A-Z]{2,}(?:\s[A-Z]{2,}){1,3}/g) || [];
+  let name = '';
+  let idNumber: string | null = null;
+  let dob: string | null = null;
 
-  return matches.filter(n =>
-    !STOP_WORDS.some(w => n.includes(w))
-  );
+  // -----------------------------
+  // ID NUMBER (robust)
+  // -----------------------------
+  const idMatch = text.match(/\b\d{7,9}\b/);
+  if (idMatch) idNumber = idMatch[0];
+
+  // -----------------------------
+  // DOB (multiple formats)
+  // -----------------------------
+  const dobMatch =
+    text.match(/\b\d{2}[\/\-]\d{2}[\/\-]\d{4}\b/) || // 12/05/1990
+    text.match(/\b\d{2}\s[A-Z]{3}\s\d{4}\b/);       // 12 MAY 1990
+
+  if (dobMatch) dob = dobMatch[0];
+
+  // -----------------------------
+  // NAME (layout-aware 🔥)
+  // Look for lines between ID NO and SEX or DOB
+  // -----------------------------
+  let capture = false;
+  let nameParts: string[] = [];
+
+  for (const line of lines) {
+    if (
+      line.includes('ID NO') ||
+      line.includes('IDENTITY NO') ||
+      line.includes('ID NUMBER')
+    ) {
+      capture = true;
+      continue;
+    }
+
+    if (
+      line.includes('SEX') ||
+      line.includes('DATE OF BIRTH') ||
+      line.includes('DOB')
+    ) {
+      capture = false;
+    }
+
+    if (capture) {
+      // filter noise
+      if (
+        line.length > 2 &&
+        !/\d/.test(line) &&
+        !line.includes('REPUBLIC') &&
+        !line.includes('KENYA')
+      ) {
+        nameParts.push(line);
+      }
+    }
+  }
+
+  // fallback if layout fails
+  if (nameParts.length === 0) {
+    const fallback = text.match(/[A-Z]{2,}(?:\s[A-Z]{2,}){1,3}/g);
+    if (fallback) nameParts = [fallback[0]];
+  }
+
+  name = nameParts.join(' ').trim();
+
+  return {
+    name,
+    idNumber,
+    dob,
+  };
 };
 
 // -----------------------------
-// ID NUMBER
+// NAME SIMILARITY
 // -----------------------------
-const extractId = (text: string) => {
-  const match = text.match(/\b\d{6,10}\b/);
-  return match ? match[0] : null;
-};
+const nameSimilarity = (a: string, b: string) => {
+  const tokensA = new Set(a.split(' '));
+  const tokensB = new Set(b.split(' '));
 
-// -----------------------------
-// SIMILARITY
-// -----------------------------
-const similarity = (a: string[], b: string[]) => {
-  const tokensA = new Set(a.flatMap(n => n.split(' ')));
-  const tokensB = new Set(b.flatMap(n => n.split(' ')));
-
-  let matchCount = 0;
+  let match = 0;
   tokensA.forEach(t => {
-    if (tokensB.has(t)) matchCount++;
+    if (tokensB.has(t)) match++;
   });
 
-  const score = matchCount / Math.max(tokensA.size, tokensB.size, 1);
+  const score = match / Math.max(tokensA.size, tokensB.size, 1);
 
-  return score >= 0.6;
+  return score >= 0.7;
 };
 
 // -----------------------------
 // HANDLER
 // -----------------------------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const debug: any = {
+    step: 'start',
+    time: new Date().toISOString(),
+  };
+
   try {
     const { imageUrls } = req.body;
 
@@ -92,29 +151,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ success: false });
     }
 
-    // ✅ PARALLEL OCR
+    console.log('📥 INPUT URLS:', imageUrls);
+
+    // -----------------------------
+    // PARALLEL OCR
+    // -----------------------------
     const results = await Promise.all(
-      imageUrls.map(async (url: string) => {
+      imageUrls.map(async (url: string, index: number) => {
+        const log: any = { index, url };
+
         const ocr = await runOCR(url);
 
         if (!ocr.ok) {
+          log.error = ocr.error;
+          console.error('❌ OCR FAIL:', log);
+
           return {
             success: false,
-            text: '',
-            names: [],
-            id: null,
+            fields: null,
+            debug: log,
           };
         }
 
-        const text = cleanText(ocr.text);
-        const names = extractNames(text);
-        const id = extractId(text);
+        const cleaned = cleanText(ocr.text);
+
+        const fields = extractKenyanIDFields(cleaned);
+
+        log.preview = cleaned.slice(0, 200);
+        log.fields = fields;
+
+        console.log('📄 OCR RESULT:', log);
 
         return {
           success: true,
-          text,
-          names,
-          id,
+          fields,
+          debug: log,
         };
       })
     );
@@ -122,27 +193,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // -----------------------------
     // COMPARE
     // -----------------------------
-    const allNames = results.map(r => r.names).filter(n => n.length > 0);
+    const names = results
+      .map(r => r.fields?.name)
+      .filter(Boolean);
+
+    const ids = results
+      .map(r => r.fields?.idNumber)
+      .filter(Boolean);
+
+    const dobs = results
+      .map(r => r.fields?.dob)
+      .filter(Boolean);
 
     let nameMatch = false;
+    let idMatch = false;
+    let dobMatch = false;
 
-    if (allNames.length >= 2) {
-      const base = allNames[0];
-      nameMatch = allNames.slice(1).every(n => similarity(base, n));
+    if (names.length >= 2) {
+      const base = names[0];
+      nameMatch = names.slice(1).every(n => nameSimilarity(base, n));
     }
 
-    const ids = results.map(r => r.id).filter(Boolean);
-    const idMatch = ids.length >= 2 && ids.every(id => id === ids[0]);
+    if (ids.length >= 2) {
+      idMatch = ids.every(id => id === ids[0]);
+    }
 
-    const success = nameMatch || idMatch;
+    if (dobs.length >= 2) {
+      dobMatch = dobs.every(d => d === dobs[0]);
+    }
 
-    return res.status(200).json({
-      success,
-      message: success ? 'Documents verified' : 'Document mismatch',
+    const finalMatch = idMatch || (nameMatch && dobMatch);
+
+    const response = {
+      success: finalMatch,
+      message: finalMatch ? 'Documents verified' : 'Document mismatch',
       results,
-    });
+      debug: {
+        names,
+        ids,
+        dobs,
+        nameMatch,
+        idMatch,
+        dobMatch,
+      },
+    };
+
+    console.log('✅ FINAL RESULT:', JSON.stringify(response, null, 2));
+
+    return res.status(200).json(response);
 
   } catch (err: any) {
+    console.error('🔥 SERVER ERROR:', err);
+
     return res.status(500).json({
       success: false,
       error: err.message,
