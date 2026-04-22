@@ -3,7 +3,7 @@ import fetch from 'node-fetch';
 import sharp from 'sharp';
 
 // -----------------------------
-// Normalize + COMPRESS Image 🔥 (ULTRA SAFE)
+// Normalize + COMPRESS Image (FIXED)
 // -----------------------------
 const normalizeImage = async (buffer: Buffer) => {
   const beforeSize = buffer.length;
@@ -11,12 +11,11 @@ const normalizeImage = async (buffer: Buffer) => {
   const compressed = await sharp(buffer)
     .rotate()
     .resize({
-      width: 650, // slightly smaller for OCR stability
+      width: 1200, // 🔥 increased for better OCR accuracy
       withoutEnlargement: true,
     })
     .jpeg({
-      quality: 30, // aggressive but stable
-      chromaSubsampling: '4:2:0',
+      quality: 65, // 🔥 less aggressive compression
     })
     .toBuffer();
 
@@ -31,7 +30,7 @@ const normalizeImage = async (buffer: Buffer) => {
 };
 
 // -----------------------------
-// OCR CALL (HARDENED)
+// OCR CALL (FIXED PAYLOAD)
 // -----------------------------
 const runOCR = async (buffer: Buffer, apiKey: string) => {
   const base64Image = buffer.toString('base64');
@@ -57,7 +56,10 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ image: base64Image }),
+      body: JSON.stringify({
+        // 🔥 FIXED FORMAT
+        src: `data:image/jpeg;base64,${base64Image}`,
+      }),
     });
 
     const raw = await response.text();
@@ -89,7 +91,7 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
 };
 
 // -----------------------------
-// SAFE TEXT EXTRACTION (FIXED)
+// SAFE TEXT EXTRACTION (IMPROVED)
 // -----------------------------
 const extractAllText = (ocr: any) => {
   const text =
@@ -97,6 +99,8 @@ const extractAllText = (ocr: any) => {
     ocr?.data?.text ||
     ocr?.result?.text ||
     ocr?.output?.text ||
+    ocr?.lines?.map((l: any) => l.text).join(' ') ||
+    ocr?.words?.map((w: any) => w.text).join(' ') ||
     '';
 
   return text
@@ -107,15 +111,24 @@ const extractAllText = (ocr: any) => {
 };
 
 // -----------------------------
-// EXTRACT NAME CANDIDATES (IMPORTANT FIX)
+// EXTRACT NAME CANDIDATES (FILTERED)
 // -----------------------------
+const STOP_WORDS = [
+  'REPUBLIC', 'KENYA', 'IDENTITY', 'CARD',
+  'NATIONAL', 'ID', 'NUMBER', 'SEX', 'DATE',
+  'BIRTH', 'PLACE', 'ISSUE'
+];
+
 const extractNameCandidates = (text: string) => {
-  const matches = text.match(/[A-Z]{2,}(?:\s[A-Z]{2,}){0,4}/g);
-  return matches || [];
+  const matches = text.match(/[A-Z]{2,}(?:\s[A-Z]{2,}){1,3}/g) || [];
+
+  return matches.filter(name =>
+    !STOP_WORDS.some(word => name.includes(word))
+  );
 };
 
 // -----------------------------
-// SET-BASED SIMILARITY (ROBUST)
+// SET-BASED SIMILARITY
 // -----------------------------
 const similarity = (a: string[], b: string[]) => {
   const setA = new Set(a);
@@ -179,7 +192,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // -----------------------------
     for (let i = 0; i < imageUrls.length; i++) {
       const url = imageUrls[i];
-
       const fileDebug: any = { index: i, url };
 
       try {
@@ -204,7 +216,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const text = extractAllText(ocr.parsed);
-
         fileDebug.extractedText = text.slice(0, 300);
 
         const nameCandidates = extractNameCandidates(text);
@@ -228,7 +239,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // -----------------------------
-    // FINAL COMPARISON (FIXED CORE LOGIC)
+    // FINAL COMPARISON
     // -----------------------------
     const allNames = results
       .map(r => r.nameCandidates)
@@ -237,6 +248,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let allMatch = false;
     let comparisons: any[] = [];
 
+    // ✅ PRIMARY: name comparison
     if (allNames.length >= 2) {
       const base = allNames[0];
 
@@ -247,6 +259,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }));
 
       allMatch = comparisons.every(c => c.match);
+    }
+
+    // ✅ FALLBACK: text similarity if names fail
+    if (allNames.length < 2) {
+      const texts = results
+        .map(r => r.text)
+        .filter(t => t && t.length > 20);
+
+      if (texts.length >= 2) {
+        const base = texts[0];
+
+        comparisons = texts.slice(1).map(t => {
+          const overlap =
+            base.split(' ').filter(w => t.includes(w)).length /
+            base.split(' ').length;
+
+          return {
+            match: overlap > 0.4,
+            confidence: Number(overlap.toFixed(3)),
+          };
+        });
+
+        allMatch = comparisons.every(c => c.match);
+      }
     }
 
     debug.step = 'completed';
