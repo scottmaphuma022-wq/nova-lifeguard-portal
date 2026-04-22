@@ -6,23 +6,33 @@ import sharp from 'sharp';
 // Normalize + COMPRESS Image 🔥
 // -----------------------------
 const normalizeImage = async (buffer: Buffer) => {
+  const beforeSize = buffer.length;
+
   const compressed = await sharp(buffer)
-    .rotate() // fix orientation
+    .rotate()
     .resize({
-      width: 1000, // 🔥 limit size
+      width: 1000,
       withoutEnlargement: true,
     })
     .jpeg({
-      quality: 55, // 🔥 strong compression
+      quality: 55,
       chromaSubsampling: '4:2:0',
     })
     .toBuffer();
 
-  return compressed;
+  const afterSize = compressed.length;
+
+  return {
+    buffer: compressed,
+    meta: {
+      beforeKB: (beforeSize / 1024).toFixed(2),
+      afterKB: (afterSize / 1024).toFixed(2),
+    },
+  };
 };
 
 // -----------------------------
-// Extract Name (simple heuristic)
+// Extract Name
 // -----------------------------
 const extractName = (text: string) => {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
@@ -40,7 +50,7 @@ const extractName = (text: string) => {
 };
 
 // -----------------------------
-// OCR CALL
+// OCR CALL (FULL DEBUG)
 // -----------------------------
 const runOCR = async (buffer: Buffer, apiKey: string) => {
   const base64Image = buffer.toString('base64');
@@ -56,15 +66,16 @@ const runOCR = async (buffer: Buffer, apiKey: string) => {
 
   const raw = await response.text();
 
-  if (!response.ok) {
-    throw new Error(`OCR failed: ${raw}`);
-  }
-
-  return JSON.parse(raw);
+  return {
+    ok: response.ok,
+    status: response.status,
+    raw,
+    parsed: response.ok ? JSON.parse(raw) : null,
+  };
 };
 
 // -----------------------------
-// Normalize Name → tokens
+// Normalize Name
 // -----------------------------
 const normalizeName = (name: string) => {
   return name
@@ -75,7 +86,7 @@ const normalizeName = (name: string) => {
 };
 
 // -----------------------------
-// Compare Names (SMART MATCH)
+// Compare Names
 // -----------------------------
 const compareNames = (nameA: string, nameB: string) => {
   const tokensA = normalizeName(nameA);
@@ -84,15 +95,13 @@ const compareNames = (nameA: string, nameB: string) => {
   let matches = 0;
 
   tokensA.forEach(a => {
-    if (tokensB.includes(a)) {
-      matches++;
-    }
+    if (tokensB.includes(a)) matches++;
   });
 
-  const scoreA = matches / tokensA.length;
-  const scoreB = matches / tokensB.length;
-
-  const confidence = Math.max(scoreA, scoreB);
+  const confidence = Math.max(
+    matches / tokensA.length,
+    matches / tokensB.length
+  );
 
   return {
     match: confidence >= 0.6,
@@ -103,7 +112,7 @@ const compareNames = (nameA: string, nameB: string) => {
 };
 
 // -----------------------------
-// Handler (URL BASED)
+// Handler
 // -----------------------------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   let debug: any = { step: 'init' };
@@ -113,59 +122,58 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    debug.step = 'read_body';
-
     const { imageUrls } = req.body;
 
-    if (!imageUrls || !Array.isArray(imageUrls) || imageUrls.length === 0) {
+    if (!imageUrls || !Array.isArray(imageUrls)) {
       return res.status(400).json({
         success: false,
-        error: 'No image URLs provided',
-        debug,
+        error: 'Invalid imageUrls',
       });
     }
-
-    debug.totalFiles = imageUrls.length;
 
     const apiKey = process.env.OPTIC_OCR_API_KEY;
     if (!apiKey) {
       return res.status(500).json({
         success: false,
         error: 'Missing OCR API key',
-        debug,
       });
     }
 
     let results: any[] = [];
 
-    // -----------------------------
-    // PROCESS EACH IMAGE URL
-    // -----------------------------
     for (let i = 0; i < imageUrls.length; i++) {
       const url = imageUrls[i];
 
-      let fileDebug: any = {
-        index: i,
-        url,
-      };
+      let fileDebug: any = { index: i, url };
 
       try {
+        // Fetch image
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to fetch image');
 
-        let buffer = Buffer.from(await response.arrayBuffer());
+        let originalBuffer = Buffer.from(await response.arrayBuffer());
 
-        // 🔥 COMPRESS IMAGE
-        buffer = await normalizeImage(buffer);
+        fileDebug.originalSizeKB = (originalBuffer.length / 1024).toFixed(2);
 
-        // 🔥 SAFETY LIMIT (avoid payload errors)
+        // Compress
+        const { buffer, meta } = await normalizeImage(originalBuffer);
+        fileDebug.compression = meta;
+
         if (buffer.length > 1.5 * 1024 * 1024) {
-          throw new Error('Image too large even after compression');
+          throw new Error('Still too large after compression');
         }
 
-        const ocrData = await runOCR(buffer, apiKey);
-        const text = (ocrData?.text || '').toLowerCase();
+        // OCR
+        const ocr = await runOCR(buffer, apiKey);
 
+        fileDebug.ocrStatus = ocr.status;
+        fileDebug.ocrRaw = ocr.raw.slice(0, 500); // prevent huge logs
+
+        if (!ocr.ok) {
+          throw new Error(`OCR API failed (${ocr.status})`);
+        }
+
+        const text = (ocr.parsed?.text || '').toLowerCase();
         const name = extractName(text);
 
         fileDebug.textSample = text.slice(0, 200);
@@ -174,7 +182,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         results.push({
           success: true,
           name,
-          text,
           debug: fileDebug,
         });
 
@@ -188,12 +195,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    // -----------------------------
-    // SMART NAME MATCHING 🔥
-    // -----------------------------
-    const names = results
-      .map(r => r.name)
-      .filter(Boolean);
+    const names = results.map(r => r.name).filter(Boolean);
 
     let allMatch = false;
     let comparisons: any[] = [];
@@ -201,38 +203,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (names.length >= 2) {
       const base = names[0];
 
-      comparisons = names.slice(1).map((n) => {
-        const result = compareNames(base, n);
-        return {
-          base,
-          comparedWith: n,
-          ...result,
-        };
-      });
+      comparisons = names.slice(1).map(n => ({
+        base,
+        comparedWith: n,
+        ...compareNames(base, n),
+      }));
 
       allMatch = comparisons.every(c => c.match);
     }
 
-    debug.names = names;
-    debug.comparisons = comparisons;
-    debug.matching = allMatch;
-
     return res.status(200).json({
       success: allMatch,
-      message: allMatch
-        ? 'All document names match'
-        : 'Document names do NOT match',
       results,
-      debug,
+      debug: {
+        names,
+        comparisons,
+      },
     });
 
   } catch (err: any) {
-    debug.error = err.message;
-
     return res.status(500).json({
       success: false,
-      error: 'Verification failed',
-      debug,
+      error: err.message,
     });
   }
 }
