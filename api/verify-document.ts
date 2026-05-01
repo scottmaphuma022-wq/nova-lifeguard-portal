@@ -1,27 +1,38 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import vision from '@google-cloud/vision';
+import Tesseract from 'tesseract.js';
+import sharp from 'sharp';
+import fetch from 'node-fetch';
 
 // -----------------------------
-// INIT CLIENT (Vercel-safe)
+// 🔥 PREPROCESS IMAGE (CRITICAL)
 // -----------------------------
-const client = new vision.ImageAnnotatorClient({
-  credentials: process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON
-    ? JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON)
-    : undefined,
-});
+const preprocessImage = async (imageUrl: string): Promise<Buffer> => {
+  const response = await fetch(imageUrl);
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
+  return await sharp(buffer)
+    .resize({ width: 1200 }) // normalize size
+    .grayscale()
+    .normalize()
+    .sharpen()
+    .toBuffer();
+};
 
 // -----------------------------
-// GOOGLE OCR (DOCUMENT MODE 🔥)
+// 🔥 TESSERACT OCR (REPLACEMENT)
 // -----------------------------
 const runOCR = async (imageUrl: string) => {
   try {
-    const [result] = await client.documentTextDetection(imageUrl);
+    const processedImage = await preprocessImage(imageUrl);
 
-    const fullText = result.fullTextAnnotation?.text || '';
+    const { data } = await Tesseract.recognize(processedImage, 'eng', {
+      logger: m => console.log('🧠 OCR:', m.status),
+    });
 
     return {
       ok: true,
-      text: fullText,
+      text: data.text || '',
     };
   } catch (err: any) {
     console.error('❌ OCR ERROR:', err.message);
@@ -50,25 +61,18 @@ const extractKenyanIDFields = (raw: string) => {
   let idNumber: string | null = null;
   let dob: string | null = null;
 
-  // -----------------------------
-  // ID NUMBER (robust)
-  // -----------------------------
+  // ID NUMBER
   const idMatch = text.match(/\b\d{7,9}\b/);
   if (idMatch) idNumber = idMatch[0];
 
-  // -----------------------------
-  // DOB (multiple formats)
-  // -----------------------------
+  // DOB
   const dobMatch =
-    text.match(/\b\d{2}[\/\-]\d{2}[\/\-]\d{4}\b/) || // 12/05/1990
-    text.match(/\b\d{2}\s[A-Z]{3}\s\d{4}\b/);       // 12 MAY 1990
+    text.match(/\b\d{2}[\/\-]\d{2}[\/\-]\d{4}\b/) ||
+    text.match(/\b\d{2}\s[A-Z]{3}\s\d{4}\b/);
 
   if (dobMatch) dob = dobMatch[0];
 
-  // -----------------------------
-  // NAME (layout-aware 🔥)
-  // Look for lines between ID NO and SEX or DOB
-  // -----------------------------
+  // NAME
   let capture = false;
   let nameParts: string[] = [];
 
@@ -91,7 +95,6 @@ const extractKenyanIDFields = (raw: string) => {
     }
 
     if (capture) {
-      // filter noise
       if (
         line.length > 2 &&
         !/\d/.test(line) &&
@@ -103,7 +106,6 @@ const extractKenyanIDFields = (raw: string) => {
     }
   }
 
-  // fallback if layout fails
   if (nameParts.length === 0) {
     const fallback = text.match(/[A-Z]{2,}(?:\s[A-Z]{2,}){1,3}/g);
     if (fallback) nameParts = [fallback[0]];
@@ -139,11 +141,6 @@ const nameSimilarity = (a: string, b: string) => {
 // HANDLER
 // -----------------------------
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const debug: any = {
-    step: 'start',
-    time: new Date().toISOString(),
-  };
-
   try {
     const { imageUrls } = req.body;
 
@@ -153,9 +150,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     console.log('📥 INPUT URLS:', imageUrls);
 
-    // -----------------------------
-    // PARALLEL OCR
-    // -----------------------------
     const results = await Promise.all(
       imageUrls.map(async (url: string, index: number) => {
         const log: any = { index, url };
@@ -174,7 +168,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         }
 
         const cleaned = cleanText(ocr.text);
-
         const fields = extractKenyanIDFields(cleaned);
 
         log.preview = cleaned.slice(0, 200);
@@ -190,20 +183,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     );
 
-    // -----------------------------
-    // COMPARE
-    // -----------------------------
-    const names = results
-      .map(r => r.fields?.name)
-      .filter(Boolean);
-
-    const ids = results
-      .map(r => r.fields?.idNumber)
-      .filter(Boolean);
-
-    const dobs = results
-      .map(r => r.fields?.dob)
-      .filter(Boolean);
+    const names = results.map(r => r.fields?.name).filter(Boolean);
+    const ids = results.map(r => r.fields?.idNumber).filter(Boolean);
+    const dobs = results.map(r => r.fields?.dob).filter(Boolean);
 
     let nameMatch = false;
     let idMatch = false;
