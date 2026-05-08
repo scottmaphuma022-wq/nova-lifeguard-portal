@@ -178,93 +178,97 @@ const CustomerClaims = () => {
     }
   };
 
-  const validateDocs = () => {
-    const rules = CLAIM_RULES[reason];
-    if (!rules) return false;
-    for (const req of rules.required) {
-      if (!files[req]) {
-        toast({ title: `${req} is required`, variant: 'destructive' });
-        return false;
-      }
-    }
-    if (Object.keys(files).length < 3) {
-      toast({
-        title: 'Minimum 3 documents required',
-        description: 'Upload ID front, ID back and a supporting document',
-        variant: 'destructive',
-      });
-      return false;
-    }
-    return true;
-  };
 
-  const verifyDocuments = async () => {
-    if (!validateDocs()) return false;
-    setVerifying(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not authenticated');
-
-      let uploadedUrls: string[] = [];
-      for (const key of Object.keys(files)) {
-        const file = files[key];
-        const path = `${user.id}/verification/${Date.now()}-${file.name}`;
-        const { error: uploadError } = await supabase.storage.from('claim-documents').upload(path, file);
-        if (uploadError) throw uploadError;
-        const { data } = supabase.storage.from('claim-documents').getPublicUrl(path);
-        uploadedUrls.push(data.publicUrl);
-      }
-
-      const res = await fetch('/api/verify-document', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrls: uploadedUrls }),
-      });
-      const result = await res.json();
-      if (!result.success) throw new Error(result.error || 'Verification failed');
-
-      setVerifying(false);
-      return true;
-    } catch (err: any) {
-      setVerifying(false);
-      toast({ title: 'Verification failed', description: err.message || 'Unknown error', variant: 'destructive' });
-      return false;
-    }
-  };
 
   const submitClaim = async () => {
-    const ok = await verifyDocuments();
-    if (!ok) return;
+    // ── Local validation ──
+    const rules = CLAIM_RULES[reason];
+    if (!rules) return;
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
-
-    let urls: string[] = [];
-    for (const key of Object.keys(files)) {
-      const file = files[key];
-      const path = `${user.id}/${Date.now()}-${file.name}`;
-      await supabase.storage.from('claim-documents').upload(path, file);
-      const { data } = supabase.storage.from('claim-documents').getPublicUrl(path);
-      urls.push(data.publicUrl);
+    for (const req of rules.required) {
+      if (!files[req]) {
+        toast({ title: `Missing document: ${req}`, variant: 'destructive' });
+        return;
+      }
     }
 
-    const claimNumber = `CLM-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    if (Object.keys(files).length < 2) {
+      toast({
+        title: 'Upload at least 2 documents',
+        description: 'ID front + supporting document are required',
+        variant: 'destructive',
+      });
+      return;
+    }
 
-    await supabase.from('claims').insert({
-      user_id: user.id,
-      claim_number: claimNumber,
-      claim_amount: calculatedAmount,
-      claim_reason: reason,
-      document_url: urls[0],
-      documents: urls,
-    });
+    setVerifying(true);
 
-    toast({ title: 'Claim submitted 🎉' });
-    setStep(0);
-    setFiles({});
-    setActiveTab('list');
-    await loadClaims();
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Please log in again');
+
+      // ── Upload all files to Supabase Storage in one pass ──
+      const urls: string[] = [];
+      const timestamp = Date.now();
+
+      for (const [docName, file] of Object.entries(files)) {
+        const safeName = docName.replace(/\s+/g, '_');
+        const path = `${user.id}/claims/${timestamp}-${safeName}-${file.name}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('claim-documents')
+          .upload(path, file, { upsert: true });
+
+        if (uploadError) throw new Error(`Failed to upload ${docName}: ${uploadError.message}`);
+
+        const { data: urlData } = supabase.storage
+          .from('claim-documents')
+          .getPublicUrl(path);
+
+        urls.push(urlData.publicUrl);
+      }
+
+      // ── Insert claim record ──
+      const claimNumber = `CLM-${new Date().getFullYear()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+      const { error: insertError } = await supabase.from('claims').insert({
+        user_id: user.id,
+        claim_number: claimNumber,
+        claim_amount: calculatedAmount,
+        claim_reason: reason,
+        claim_status: 'pending',
+        document_url: urls[0] ?? null,
+        documents: urls,
+        date_applied: new Date().toISOString(),
+      });
+
+      if (insertError) throw new Error(`Failed to save claim: ${insertError.message}`);
+
+      toast({
+        title: 'Claim submitted successfully 🎉',
+        description: `Your claim ${claimNumber} is now under review.`,
+      });
+
+      // Reset form and refresh list
+      setStep(0);
+      setFiles({});
+      setSelectedCover(null);
+      setReason('');
+      setCalculatedAmount(null);
+      setActiveTab('list');
+      await loadClaims();
+
+    } catch (err: any) {
+      toast({
+        title: 'Submission failed',
+        description: err.message || 'An unexpected error occurred. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setVerifying(false);
+    }
   };
+
 
   /* ─────────────── UI ─────────────── */
   return (

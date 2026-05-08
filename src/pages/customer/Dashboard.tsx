@@ -153,9 +153,9 @@ const CustomerDashboard = () => {
   }, []);
 
   const handleUploadNow = async () => {
-    const allFilled = Object.values(uploadFiles).every(Boolean);
-    if (!allFilled) {
-      return toast({ title: 'Please upload all required documents', variant: 'destructive' });
+    const filledDocs = Object.entries(uploadFiles).filter(([, f]) => f !== null);
+    if (filledDocs.length === 0) {
+      return toast({ title: 'Please upload at least one document', variant: 'destructive' });
     }
 
     setUploading(true);
@@ -163,16 +163,21 @@ const CustomerDashboard = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      for (const [docName, file] of Object.entries(uploadFiles)) {
+      const timestamp = Date.now();
+      for (const [docName, file] of filledDocs) {
         if (!file) continue;
-        const path = `${user.id}/claim-docs/${Date.now()}-${docName.replace(/\s/g, '_')}`;
-        const { error } = await supabase.storage.from('claim-documents').upload(path, file);
-        if (error) throw error;
+        const safeName = docName.replace(/\s+/g, '_');
+        const path = `${user.id}/pending-docs/${timestamp}-${safeName}-${file.name}`;
+        const { error } = await supabase.storage
+          .from('claim-documents')
+          .upload(path, file, { upsert: true });
+        if (error) throw new Error(`Upload failed for ${docName}: ${error.message}`);
       }
 
-      toast({ title: 'Documents uploaded successfully ✓' });
+      toast({ title: 'Documents uploaded successfully ✓', description: 'Our team will review your documents shortly.' });
       setUploadOpen(false);
       setUploadFiles({ 'Death Certificate': null, 'ID Copy': null, 'Medical Report': null });
+
     } catch (err: any) {
       toast({ title: 'Upload failed', description: err.message, variant: 'destructive' });
     } finally {
@@ -220,9 +225,9 @@ const CustomerDashboard = () => {
                 </div>
               </div>
               <div className="mt-4 pt-3 border-t border-border/50">
-                  <span className="text-xs text-muted-foreground flex items-center font-medium">
-                      Policies page coming soon
-                  </span>
+                  <Link to="/policies" className="text-xs text-primary flex items-center font-medium hover:underline">
+                      View policies <ChevronRight className="w-3 h-3 ml-1" />
+                  </Link>
               </div>
             </CardContent>
           </Card>
@@ -352,7 +357,7 @@ const CustomerDashboard = () => {
                     </div>
                  </div>
                  <div className="mt-4">
-                     <Button className="bg-primary hover:bg-primary/90 text-white rounded-md">View Policy Details</Button>
+                     <Button className="bg-primary hover:bg-primary/90 text-white rounded-md" onClick={() => navigate('/policies')}>View Policy Details</Button>
                  </div>
               </CardContent>
             </Card>
@@ -468,7 +473,7 @@ const CustomerDashboard = () => {
             <Card className="shadow-sm border-border/50">
                 <CardHeader className="flex flex-row items-center justify-between pb-3">
                     <CardTitle className="text-base">Notifications</CardTitle>
-                    <Link to="#" className="text-xs text-primary hover:underline">View all</Link>
+                    <Link to="/claims" className="text-xs text-primary hover:underline">View all</Link>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="flex items-start gap-3">
@@ -499,7 +504,7 @@ const CustomerDashboard = () => {
                         </div>
                     </div>
                     <div className="pt-2 text-center border-t border-border/50">
-                        <Link to="#" className="text-xs text-primary hover:underline flex items-center justify-center">
+                        <Link to="/claims" className="text-xs text-primary hover:underline flex items-center justify-center">
                             View all notifications <ChevronRight className="w-3 h-3 ml-1" />
                         </Link>
                     </div>
@@ -551,7 +556,7 @@ const CustomerDashboard = () => {
             <Card className="shadow-sm border-border/50">
                 <CardHeader className="flex flex-row items-center justify-between pb-3">
                     <CardTitle className="text-base">Activity Feed</CardTitle>
-                    <Link to="#" className="text-xs text-primary hover:underline">View all</Link>
+                    <Link to="/claims" className="text-xs text-primary hover:underline">View all</Link>
                 </CardHeader>
                 <CardContent className="space-y-0 relative">
                     <div className="absolute left-[21px] top-4 bottom-4 w-px bg-border/80"></div>

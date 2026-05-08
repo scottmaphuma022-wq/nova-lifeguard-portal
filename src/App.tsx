@@ -12,6 +12,7 @@ import CustomerClaims from "./pages/customer/Claims";
 import CustomerPayments from "./pages/customer/Payments";
 import CustomerProfile from "./pages/customer/Profile";
 import CustomerSettings from "./pages/customer/Settings";
+import CustomerPolicies from "./pages/customer/Policies";
 import AdminPortal from "./pages/admin/Portal";
 import ManagerDashboard from "./pages/admin/ManagerDashboard";
 import ManagerClaims from "./pages/admin/ManagerClaims";
@@ -39,6 +40,7 @@ const App = () => (
             <Route path="/payments" element={<CustomerPayments />} />
             <Route path="/profile" element={<CustomerProfile />} />
             <Route path="/settings" element={<CustomerSettings />} />
+            <Route path="/policies" element={<CustomerPolicies />} />
 
             {/* Admin Portal Routes */}
             <Route path="/novaportal" element={<AdminPortal />} />

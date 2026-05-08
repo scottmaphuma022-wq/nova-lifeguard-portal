@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   FileText,
   CreditCard,
+  Shield,
   User,
   LogOut,
   Settings,
@@ -14,7 +15,6 @@ import {
   Bell,
   AlertCircle,
   CheckCircle,
-  Shield,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -38,12 +38,13 @@ interface DashboardLayoutProps {
 
 const navItems = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+  { name: "Policies", href: "/policies", icon: Shield },
   { name: "Claims", href: "/claims", icon: FileText },
   { name: "Payments", href: "/payments", icon: CreditCard },
 ];
 
 /* ─── Mock notifications ─── */
-const MOCK_NOTIFICATIONS = [
+const INITIAL_NOTIFICATIONS = [
   {
     id: 1,
     icon: AlertCircle,
@@ -94,31 +95,26 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const [username, setUsername] = useState("User");
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState(INITIAL_NOTIFICATIONS);
   const notifRef = useRef<HTMLDivElement>(null);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  // 🔹 FETCH USERNAME FROM SUPABASE
   const fetchProfile = async () => {
     if (!user?.id) return;
-
     const { data } = await supabase
       .from("userprofile")
       .select("username")
       .eq("id", user.id)
       .single();
-
-    if (data?.username) {
-      setUsername(data.username);
-    }
+    if (data?.username) setUsername(data.username);
   };
 
   useEffect(() => {
     fetchProfile();
   }, [user]);
 
-  // Close notif panel on outside click
+  // Close notification panel on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
@@ -129,22 +125,17 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // 🔹 LOGOUT WITH UX LOADING
   const handleLogout = async () => {
     setIsLoggingOut(true);
     await supabase.auth.signOut();
-    setTimeout(() => {
-      navigate("/");
-    }, 2000);
+    setTimeout(() => navigate("/"), 2000);
   };
 
-  const markAllRead = () => {
+  const markAllRead = () =>
     setNotifications((n) => n.map((item) => ({ ...item, read: true })));
-  };
 
-  const dismissNotif = (id: number) => {
+  const dismissNotif = (id: number) =>
     setNotifications((n) => n.filter((item) => item.id !== id));
-  };
 
   const isActive = (href: string) => location.pathname === href;
 
@@ -173,13 +164,35 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
         ))}
       </nav>
 
-      <div className="p-4 border-t border-border">
+      <div className="p-4 border-t border-border space-y-1">
+        <Link
+          to="/profile"
+          className={`flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+            isActive("/profile")
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          <User className="h-4 w-4" />
+          Profile
+        </Link>
+        <Link
+          to="/settings"
+          className={`flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+            isActive("/settings")
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted hover:text-foreground"
+          }`}
+        >
+          <Settings className="h-4 w-4" />
+          Settings
+        </Link>
         <Button
           variant="ghost"
-          className="w-full justify-start text-muted-foreground"
+          className="w-full justify-start text-muted-foreground hover:text-destructive"
           onClick={handleLogout}
         >
-          <LogOut className="mr-3 h-5 w-5" />
+          <LogOut className="mr-3 h-4 w-4" />
           Logout
         </Button>
       </div>
@@ -188,14 +201,12 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
 
   return (
     <div className="min-h-screen flex bg-muted/30">
-      {/* 🔹 LOGOUT LOADING OVERLAY */}
+      {/* Logout overlay */}
       {isLoggingOut && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
           <div className="flex flex-col items-center gap-4">
             <div className="animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent" />
-            <p className="text-sm text-muted-foreground">
-              Logging out securely...
-            </p>
+            <p className="text-sm text-muted-foreground">Logging out securely...</p>
           </div>
         </div>
       )}
@@ -206,11 +217,11 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
       </aside>
 
       {/* Main */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <header className="sticky top-0 z-40 bg-background border-b border-border">
           <div className="flex h-16 items-center justify-between px-4 lg:px-6">
-            {/* Mobile Menu */}
+            {/* Mobile menu */}
             <Sheet>
               <SheetTrigger asChild>
                 <Button variant="ghost" size="icon" className="lg:hidden">
@@ -226,9 +237,9 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
               <Logo size="sm" />
             </div>
 
-            {/* Right: Notifications + User Menu */}
-            <div className="flex items-center gap-2">
-              
+            {/* Right side */}
+            <div className="flex items-center gap-2 ml-auto">
+
               {/* ─── Notification Bell ─── */}
               <div className="relative" ref={notifRef}>
                 <button
@@ -243,11 +254,12 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                   )}
                 </button>
 
-                {/* Notifications Dropdown Panel */}
+                {/* Notification dropdown — fixed width, right-anchored, viewport-safe */}
                 {notifOpen && (
                   <div
                     id="notif-panel"
-                    className="absolute right-0 mt-2 w-80 sm:w-96 bg-card border border-border rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in slide-in-from-top-2 duration-150"
+                    className="absolute right-0 mt-2 w-[340px] max-w-[calc(100vw-1rem)] bg-card border border-border rounded-xl shadow-xl z-50 overflow-hidden"
+                    style={{ transform: "none" }}
                   >
                     {/* Header */}
                     <div className="flex items-center justify-between px-4 py-3 border-b border-border">
@@ -267,8 +279,8 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                       </button>
                     </div>
 
-                    {/* List */}
-                    <div className="max-h-80 overflow-y-auto divide-y divide-border/50">
+                    {/* Notification list */}
+                    <div className="max-h-72 overflow-y-auto divide-y divide-border/50">
                       {notifications.length === 0 ? (
                         <div className="py-10 text-center text-sm text-muted-foreground">
                           No notifications
@@ -277,8 +289,8 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                         notifications.map((n) => (
                           <div
                             key={n.id}
-                            className={`flex items-start gap-3 px-4 py-3 relative transition-colors ${
-                              n.read ? "opacity-60 bg-transparent" : "bg-muted/30"
+                            className={`flex items-start gap-3 px-4 py-3 transition-colors ${
+                              n.read ? "opacity-60" : "bg-muted/30"
                             }`}
                           >
                             <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${n.bg}`}>
@@ -286,12 +298,12 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                             </div>
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-semibold">{n.title}</p>
-                              <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{n.body}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{n.body}</p>
                               <p className="text-[10px] text-muted-foreground/70 mt-1">{n.time}</p>
                             </div>
                             <button
                               onClick={() => dismissNotif(n.id)}
-                              className="shrink-0 text-muted-foreground hover:text-foreground mt-1 transition-colors"
+                              className="shrink-0 text-muted-foreground hover:text-foreground mt-0.5 transition-colors"
                             >
                               <X className="w-3.5 h-3.5" />
                             </button>
@@ -300,10 +312,13 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                       )}
                     </div>
 
-                    {/* Footer */}
+                    {/* Footer — links to claims for action */}
                     <div className="border-t border-border px-4 py-2.5 text-center">
-                      <button className="text-xs text-primary hover:underline font-medium">
-                        View all notifications
+                      <button
+                        onClick={() => { setNotifOpen(false); navigate("/claims"); }}
+                        className="text-xs text-primary hover:underline font-medium"
+                      >
+                        View all activity →
                       </button>
                     </div>
                   </div>
@@ -325,7 +340,6 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                     <ChevronDown className="h-4 w-4 text-muted-foreground" />
                   </Button>
                 </DropdownMenuTrigger>
-
                 <DropdownMenuContent align="end" className="w-48">
                   <DropdownMenuItem onClick={() => navigate("/profile")}>
                     <User className="mr-2 h-4 w-4" />
@@ -336,10 +350,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                     Settings
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={handleLogout}
-                    className="text-destructive"
-                  >
+                  <DropdownMenuItem onClick={handleLogout} className="text-destructive">
                     <LogOut className="mr-2 h-4 w-4" />
                     Logout
                   </DropdownMenuItem>
@@ -349,7 +360,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           </div>
         </header>
 
-        {/* Content */}
+        {/* Page content */}
         <main className="flex-1 p-4 lg:p-6">{children}</main>
       </div>
 
