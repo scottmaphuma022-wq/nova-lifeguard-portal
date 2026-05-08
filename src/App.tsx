@@ -10,6 +10,8 @@ import NotFound from "./pages/NotFound";
 import CustomerDashboard from "./pages/customer/Dashboard";
 import CustomerClaims from "./pages/customer/Claims";
 import CustomerPayments from "./pages/customer/Payments";
+import CustomerProfile from "./pages/customer/Profile";
+import CustomerSettings from "./pages/customer/Settings";
 import AdminPortal from "./pages/admin/Portal";
 import ManagerDashboard from "./pages/admin/ManagerDashboard";
 import ManagerClaims from "./pages/admin/ManagerClaims";
@@ -35,6 +37,8 @@ const App = () => (
             <Route path="/dashboard" element={<CustomerDashboard />} />
             <Route path="/claims" element={<CustomerClaims />} />
             <Route path="/payments" element={<CustomerPayments />} />
+            <Route path="/profile" element={<CustomerProfile />} />
+            <Route path="/settings" element={<CustomerSettings />} />
 
             {/* Admin Portal Routes */}
             <Route path="/novaportal" element={<AdminPortal />} />
