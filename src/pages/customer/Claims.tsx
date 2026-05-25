@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import DashboardLayout from '@/components/DashboardLayout';
 import { supabase } from '@/lib/supabaseClient';
@@ -83,6 +84,10 @@ const CustomerClaims = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
 
+  // ── Tracking modal ──
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [viewingClaim, setViewingClaim] = useState<any>(null);
+
   // ── New claim form ──
   const [step, setStep] = useState(0);
   const [loadingCalc, setLoadingCalc] = useState(false);
@@ -123,7 +128,17 @@ const CustomerClaims = () => {
   /* ── Load covers ── */
   const loadCovers = async () => {
     const { data } = await supabase.from('covers').select('*');
-    setCovers(data || []);
+    if (data) {
+      const unique = data.reduce((acc: any[], curr) => {
+        if (!acc.find((item: any) => item.cover_type === curr.cover_type)) {
+          acc.push(curr);
+        }
+        return acc;
+      }, []);
+      setCovers(unique);
+    } else {
+      setCovers([]);
+    }
   };
 
   useEffect(() => {
@@ -281,13 +296,6 @@ const CustomerClaims = () => {
             <h1 className="text-2xl font-bold">Claims</h1>
             <p className="text-muted-foreground text-sm mt-0.5">View and manage your insurance claims</p>
           </div>
-          <Button
-            id="new-claim-btn"
-            onClick={() => { setActiveTab('new'); setStep(0); setFiles({}); setSelectedCover(null); setReason(''); }}
-            className="bg-primary hover:bg-primary/90"
-          >
-            <Plus className="w-4 h-4 mr-2" /> New Claim
-          </Button>
         </div>
 
         {/* Tabs */}
@@ -404,8 +412,14 @@ const CustomerClaims = () => {
                             </div>
                           </td>
                           <td className="px-4 py-3.5 text-right">
-                            <button className="text-xs text-primary hover:underline font-medium flex items-center ml-auto gap-0.5">
-                              View <ChevronRight className="w-3 h-3" />
+                            <button
+                              onClick={() => {
+                                setViewingClaim(claim);
+                                setStatusDialogOpen(true);
+                              }}
+                              className="text-xs text-primary hover:underline font-medium flex items-center ml-auto gap-0.5"
+                            >
+                              Track Status <ChevronRight className="w-3 h-3" />
                             </button>
                           </td>
                         </tr>
@@ -560,6 +574,62 @@ const CustomerClaims = () => {
         )}
 
       </div>
+
+      {/* Track Status Dialog */}
+      <Dialog open={statusDialogOpen} onOpenChange={setStatusDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Claim Status Tracker</DialogTitle>
+            <DialogDescription>
+              Details for claim {viewingClaim?.claim_number}
+            </DialogDescription>
+          </DialogHeader>
+          {viewingClaim && (
+            <div className="py-6 space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Status</p>
+                  <Badge variant="outline" className={`mt-1 capitalize text-sm ${statusColors[viewingClaim.claim_status?.toLowerCase()] || ''}`}>
+                    {viewingClaim.claim_status === 'pending' ? 'Pending Docs' : viewingClaim.claim_status}
+                  </Badge>
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-muted-foreground">Amount</p>
+                  <p className="font-semibold text-lg">KES {Number(viewingClaim.claim_amount || 0).toLocaleString()}</p>
+                </div>
+              </div>
+
+              <div className="relative border-l-2 border-muted ml-3 space-y-6">
+                <div className="relative">
+                  <span className={`absolute -left-[17px] top-1 h-3 w-3 rounded-full ${['pending', 'under review', 'approved', 'paid', 'rejected'].includes(viewingClaim.claim_status) ? 'bg-primary ring-4 ring-background' : 'bg-muted'}`} />
+                  <p className="font-medium text-sm pl-4">Claim Submitted</p>
+                  <p className="text-xs text-muted-foreground pl-4">{new Date(viewingClaim.date_applied).toLocaleDateString()}</p>
+                </div>
+                <div className="relative">
+                  <span className={`absolute -left-[17px] top-1 h-3 w-3 rounded-full ${['under review', 'approved', 'paid', 'rejected'].includes(viewingClaim.claim_status) ? 'bg-primary ring-4 ring-background' : 'bg-muted'}`} />
+                  <p className="font-medium text-sm pl-4">Under Review</p>
+                  <p className="text-xs text-muted-foreground pl-4">Our team is verifying documents.</p>
+                </div>
+                <div className="relative">
+                  <span className={`absolute -left-[17px] top-1 h-3 w-3 rounded-full ${['approved', 'paid'].includes(viewingClaim.claim_status) ? 'bg-success ring-4 ring-background' : viewingClaim.claim_status === 'rejected' ? 'bg-destructive ring-4 ring-background' : 'bg-muted'}`} />
+                  <p className="font-medium text-sm pl-4">Decision Made</p>
+                  <p className="text-xs text-muted-foreground pl-4">{viewingClaim.claim_status === 'rejected' ? 'Claim rejected' : 'Claim approved'}</p>
+                </div>
+                {['approved', 'paid'].includes(viewingClaim.claim_status) && (
+                  <div className="relative">
+                    <span className={`absolute -left-[17px] top-1 h-3 w-3 rounded-full ${viewingClaim.claim_status === 'paid' ? 'bg-success ring-4 ring-background' : 'bg-muted'}`} />
+                    <p className="font-medium text-sm pl-4">Paid</p>
+                    <p className="text-xs text-muted-foreground pl-4">Funds disbursed.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStatusDialogOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
   );
 };

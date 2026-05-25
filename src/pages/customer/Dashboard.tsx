@@ -197,16 +197,7 @@ const CustomerDashboard = () => {
             </h1>
           </div>
           <div className="flex items-center gap-4 hidden md:flex">
-             <div className="relative cursor-pointer hover:bg-muted p-2 rounded-full transition-colors">
-                 <Bell className="w-5 h-5 text-muted-foreground" />
-                 <span className="absolute top-1 right-1 w-2 h-2 bg-destructive rounded-full border border-background"></span>
-             </div>
-             <div className="flex items-center gap-2 cursor-pointer hover:bg-muted p-1 pr-3 rounded-full transition-colors border border-transparent hover:border-border">
-                 <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-xs">
-                     {username.charAt(0).toUpperCase()}
-                 </div>
-                 <span className="text-sm font-medium">{username}</span>
-             </div>
+             {/* Duplicated notifications and profile removed to match DashboardLayout */}
           </div>
         </div>
 
@@ -430,6 +421,57 @@ const CustomerDashboard = () => {
                 </CardContent>
             </Card>
 
+            {/* Activity Feed (Moved to left column for balance) */}
+            <Card className="shadow-sm border-border/50">
+                <CardHeader className="flex flex-row items-center justify-between pb-3">
+                    <CardTitle className="text-base">Activity Feed</CardTitle>
+                    <Link to="/claims" className="text-xs text-primary hover:underline">View all</Link>
+                </CardHeader>
+                <CardContent className="space-y-0 relative">
+                    <div className="absolute left-[21px] top-4 bottom-4 w-px bg-border/80"></div>
+                    
+                    <div className="flex gap-4 pb-4 relative z-10">
+                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
+                            <Activity className="w-3 h-3" />
+                        </div>
+                        <div>
+                            <p className="text-sm">You submitted claim <strong>CLM-2024-0003</strong></p>
+                            <p className="text-xs text-muted-foreground mt-0.5">10 May 2024, 10:30 AM</p>
+                        </div>
+                    </div>
+                    
+                    <div className="flex gap-4 pb-4 relative z-10">
+                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
+                            <Activity className="w-3 h-3" />
+                        </div>
+                        <div>
+                            <p className="text-sm">Document uploaded for claim <strong>CLM-2024-0002</strong></p>
+                            <p className="text-xs text-muted-foreground mt-0.5">22 Apr 2024, 11:15 AM</p>
+                        </div>
+                    </div>
+                    
+                    <div className="flex gap-4 pb-4 relative z-10">
+                        <div className="w-6 h-6 rounded-full bg-success text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
+                            <CheckCircle className="w-3 h-3" />
+                        </div>
+                        <div>
+                            <p className="text-sm">Claim <strong>CLM-2024-0002</strong> approved</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">25 Apr 2024, 02:20 PM</p>
+                        </div>
+                    </div>
+                    
+                    <div className="flex gap-4 relative z-10">
+                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
+                            <CreditCard className="w-3 h-3" />
+                        </div>
+                        <div>
+                            <p className="text-sm">Payment of KES 200,000 completed for claim <strong>CLM-2024-0001</strong></p>
+                            <p className="text-xs text-muted-foreground mt-0.5">20 Feb 2024, 09:45 AM</p>
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
+
           </div>
 
           {/* Right Column (Narrower) */}
@@ -552,57 +594,7 @@ const CustomerDashboard = () => {
                 </CardContent>
             </Card>
             
-            {/* Activity Feed */}
-            <Card className="shadow-sm border-border/50">
-                <CardHeader className="flex flex-row items-center justify-between pb-3">
-                    <CardTitle className="text-base">Activity Feed</CardTitle>
-                    <Link to="/claims" className="text-xs text-primary hover:underline">View all</Link>
-                </CardHeader>
-                <CardContent className="space-y-0 relative">
-                    <div className="absolute left-[21px] top-4 bottom-4 w-px bg-border/80"></div>
-                    
-                    <div className="flex gap-4 pb-4 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
-                            <Activity className="w-3 h-3" />
-                        </div>
-                        <div>
-                            <p className="text-sm">You submitted claim <strong>CLM-2024-0003</strong></p>
-                            <p className="text-xs text-muted-foreground mt-0.5">10 May 2024, 10:30 AM</p>
-                        </div>
-                    </div>
-                    
-                    <div className="flex gap-4 pb-4 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
-                            <Activity className="w-3 h-3" />
-                        </div>
-                        <div>
-                            <p className="text-sm">Document uploaded for claim <strong>CLM-2024-0002</strong></p>
-                            <p className="text-xs text-muted-foreground mt-0.5">22 Apr 2024, 11:15 AM</p>
-                        </div>
-                    </div>
-                    
-                    <div className="flex gap-4 pb-4 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-success text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
-                            <CheckCircle className="w-3 h-3" />
-                        </div>
-                        <div>
-                            <p className="text-sm">Claim <strong>CLM-2024-0002</strong> approved</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">25 Apr 2024, 02:20 PM</p>
-                        </div>
-                    </div>
-                    
-                    <div className="flex gap-4 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
-                            <CreditCard className="w-3 h-3" />
-                        </div>
-                        <div>
-                            <p className="text-sm">Payment of KES 200,000 completed for claim <strong>CLM-2024-0001</strong></p>
-                            <p className="text-xs text-muted-foreground mt-0.5">20 Feb 2024, 09:45 AM</p>
-                        </div>
-                    </div>
-                </CardContent>
-            </Card>
-
+            {/* End of Right Column */}
           </div>
         </div>
       </div>

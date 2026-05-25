@@ -200,7 +200,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   );
 
   return (
-    <div className="min-h-screen flex bg-muted/30">
+    <div className="h-screen overflow-hidden flex bg-muted/30">
       {/* Logout overlay */}
       {isLoggingOut && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
@@ -361,8 +361,27 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 p-4 lg:p-6">{children}</main>
+        <main className="flex-1 p-4 lg:p-6 overflow-y-auto pb-24 lg:pb-6">{children}</main>
       </div>
+
+      {/* Mobile Bottom Navigation (App Interface) */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border z-50 flex items-center justify-around pb-safe pt-2">
+        {navItems.map((item) => {
+          const active = isActive(item.href);
+          return (
+            <Link
+              key={item.name}
+              to={item.href}
+              className={`flex flex-col items-center justify-center pb-2 px-3 ${
+                active ? "text-primary" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <item.icon className={`h-5 w-5 mb-1 ${active ? "fill-primary/20" : ""}`} />
+              <span className="text-[10px] font-medium">{item.name}</span>
+            </Link>
+          );
+        })}
+      </nav>
 
       <ChatBot />
     </div>

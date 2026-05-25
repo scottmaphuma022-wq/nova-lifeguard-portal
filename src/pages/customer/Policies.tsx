@@ -59,7 +59,6 @@ const CustomerPolicies = () => {
         cover:cover_id ( id, cover_name, cover_type, price )
       `)
       .eq('user_id', user.id)
-      .eq('payment_status', 'completed')
       .order('payment_date', { ascending: false });
 
     if (payments && payments.length > 0) {
@@ -184,13 +183,6 @@ const CustomerPolicies = () => {
             <h1 className="text-2xl font-bold">My Policies</h1>
             <p className="text-muted-foreground text-sm mt-0.5">View and manage your insurance coverage</p>
           </div>
-          <Button
-            id="buy-policy-btn"
-            className="bg-primary hover:bg-primary/90"
-            onClick={() => setView('buy')}
-          >
-            + Buy a Policy
-          </Button>
         </div>
 
         {/* Tabs */}

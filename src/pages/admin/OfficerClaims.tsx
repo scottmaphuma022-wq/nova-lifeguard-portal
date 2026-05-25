@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FileText, CheckCircle, AlertTriangle, Forward, Eye, Search, Filter } from 'lucide-react';
+import { FileText, CheckCircle, AlertTriangle, Forward, Eye, Search, Filter, Download } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,6 +50,8 @@ const statusColors: Record<string, string> = {
   'Missing Docs': 'bg-destructive/10 text-destructive',
   'Verified': 'bg-success/10 text-success',
   'Forwarded': 'bg-info/10 text-info',
+  'Approved': 'bg-success/10 text-success',
+  'Flagged': 'bg-destructive/10 text-destructive',
 };
 
 const OfficerClaims = () => {
@@ -99,13 +101,33 @@ const OfficerClaims = () => {
     setSelectedOfficer('');
   };
 
+  const handleExportExcel = () => {
+    const csvContent = "data:text/csv;charset=utf-8," 
+      + "Claim ID,Customer Name,Email,Type,Amount,Status,Date\n"
+      + filteredClaims.map(c => `${c.id},${c.customer},${c.email},${c.type},${c.amount},${c.status},${c.date}`).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "claims_export.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast({ title: 'Export Successful', description: 'Claims exported to Excel.' });
+  };
+
   return (
     <AdminLayout role="officer">
       <div className="space-y-6">
         {/* Header */}
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold">Claims Processing</h1>
-          <p className="text-muted-foreground">Verify documents and process assigned claims</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl lg:text-3xl font-bold">Claims Processing</h1>
+            <p className="text-muted-foreground">Verify documents and process assigned claims</p>
+          </div>
+          <Button onClick={handleExportExcel} variant="outline" className="gap-2">
+            <Download className="h-4 w-4" />
+            Export to Excel
+          </Button>
         </div>
 
         {/* Filters */}
@@ -212,6 +234,35 @@ const OfficerClaims = () => {
                           </Button>
                         </>
                       )}
+
+                      {claim.status === 'Verified' && (
+                        <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-success border-success hover:bg-success hover:text-success-foreground"
+                            onClick={() => {
+                              setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Approved' as any } : c));
+                              toast({ title: 'Claim Approved' });
+                            }}
+                          >
+                            <CheckCircle className="h-4 w-4 mr-1" />
+                            Approve
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-warning border-warning hover:bg-warning hover:text-warning-foreground"
+                            onClick={() => {
+                              setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Flagged' as any } : c));
+                              toast({ title: 'Anomaly Flagged', description: 'Sent for payment history review.', variant: 'destructive' });
+                            }}
+                          >
+                            <AlertTriangle className="h-4 w-4 mr-1" />
+                            Flag Anomaly
+                          </Button>
+                        </>
+                      )}
                       
                       {(claim.status === 'Pending Review' || claim.status === 'Missing Docs') && (
                         <Button
@@ -278,6 +329,10 @@ const OfficerClaims = () => {
                     </div>
                   ))}
                 </div>
+                <Button className="w-full mt-4 gap-2" variant="outline" onClick={() => toast({ title: 'Downloaded Docs', description: 'Customer documents exported as PDFs.' })}>
+                  <Download className="h-4 w-4" />
+                  Download All as PDF
+                </Button>
               </div>
             </div>
           )}
