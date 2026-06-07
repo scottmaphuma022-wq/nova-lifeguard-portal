@@ -251,21 +251,8 @@ const CustomerClaims = () => {
         urls.push(urlData.publicUrl);
       }
 
-      // ── Get claims officers for assignment ──
-      let assignedOfficerId = null;
-      try {
-        const { data: officersData } = await supabase
-          .from('userprofile')
-          .select('id')
-          .eq('role', 'claims_officer');
-          
-        if (officersData && officersData.length > 0) {
-          const randomIndex = Math.floor(Math.random() * officersData.length);
-          assignedOfficerId = officersData[randomIndex].id;
-        }
-      } catch (err) {
-        console.error('Failed to fetch claims officers for auto-assignment:', err);
-      }
+      // Claims are submitted unassigned — the manager assigns them to an officer
+      // from the Claims Management page in the admin portal.
 
       // ── Insert claim record ──
       const claimNumber = `CLM-${new Date().getFullYear()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
@@ -279,7 +266,7 @@ const CustomerClaims = () => {
         document_url: urls[0] ?? null,
         documents: urls,
         date_applied: new Date().toISOString(),
-        officer_id: assignedOfficerId,
+        officer_id: null,
       });
 
       if (insertError) throw new Error(`Failed to save claim: ${insertError.message}`);
