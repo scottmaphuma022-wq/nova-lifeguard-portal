@@ -10,7 +10,6 @@ import {
   LogOut,
   Settings,
   ChevronDown,
-  Menu,
   BarChart3,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -21,7 +20,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import Logo from "@/components/Logo";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabaseClient";
@@ -112,7 +110,7 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
 
   return (
     <div className="min-h-screen flex bg-muted/30">
-      {/* Sidebar */}
+      {/* Sidebar — desktop only */}
       <aside className="hidden lg:flex w-64 bg-card border-r border-border flex-col">
         <SidebarContent />
       </aside>
@@ -123,24 +121,13 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
         <header className="sticky top-0 z-40 bg-background border-b border-border">
           <div className="flex h-16 items-center justify-between px-4 lg:px-6">
 
-            {/* Mobile Menu */}
-            <Sheet>
-              <SheetTrigger asChild>
-                <Button variant="ghost" size="icon" className="lg:hidden">
-                  <Menu className="h-5 w-5" />
-                </Button>
-              </SheetTrigger>
-              <SheetContent side="left" className="p-0 w-64">
-                <SidebarContent />
-              </SheetContent>
-            </Sheet>
-
+            {/* Mobile: show logo, no hamburger */}
             <div className="lg:hidden">
               <Logo size="sm" />
             </div>
 
             {/* USER MENU */}
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 ml-auto">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" className="flex items-center gap-2">
@@ -178,8 +165,40 @@ const AdminLayout = ({ children, role }: AdminLayoutProps) => {
         </header>
 
         {/* Content */}
-        <main className="flex-1 p-4 lg:p-6">{children}</main>
+        <main className="flex-1 p-4 lg:p-6 pb-24 lg:pb-6">{children}</main>
       </div>
+
+      {/* Mobile Bottom Tab Bar */}
+      <nav
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-md border-t border-border/60 flex items-center justify-around"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)', paddingTop: '6px', minHeight: '60px' }}
+      >
+        {navItems.map((item) => {
+          const active = isActive(item.href);
+          return (
+            <Link
+              key={item.name}
+              to={item.href}
+              className="flex flex-col items-center justify-center gap-0.5 flex-1 py-1 relative"
+            >
+              {/* Active indicator pill */}
+              {active && (
+                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 rounded-full bg-primary" />
+              )}
+              <div className={`flex items-center justify-center w-9 h-7 rounded-xl transition-colors ${
+                active ? 'bg-primary/10' : ''
+              }`}>
+                <item.icon className={`h-5 w-5 transition-colors ${
+                  active ? 'text-primary' : 'text-muted-foreground'
+                }`} />
+              </div>
+              <span className={`text-[10px] font-medium transition-colors ${
+                active ? 'text-primary' : 'text-muted-foreground'
+              }`}>{item.name}</span>
+            </Link>
+          );
+        })}
+      </nav>
     </div>
   );
 };
