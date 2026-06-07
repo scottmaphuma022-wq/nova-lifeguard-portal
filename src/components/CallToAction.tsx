@@ -1,6 +1,24 @@
 import { Shield } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '@/contexts/AuthContext';
+import { Button } from '@/components/ui/button';
 
-const CallToAction = () => {
+interface CallToActionProps {
+  onGetStarted: () => void;
+}
+
+const CallToAction = ({ onGetStarted }: CallToActionProps) => {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+
+  const handleAction = () => {
+    if (user) {
+      navigate('/dashboard');
+    } else {
+      onGetStarted();
+    }
+  };
+
   return (
     <section className="py-20 bg-[#0f172a] text-white overflow-hidden relative">
       {/* Decorative background elements */}
@@ -32,6 +50,13 @@ const CallToAction = () => {
               Join thousands of satisfied customers who trust us for fast,
               transparent and reliable claim processing.
             </p>
+            <Button
+              onClick={handleAction}
+              size="lg"
+              className="bg-white text-slate-900 hover:bg-blue-50 font-semibold px-8 py-6 text-lg rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 transform hover:-translate-y-0.5"
+            >
+              {user ? 'Go to Dashboard' : 'Get Started'}
+            </Button>
           </div>
         </div>
       </div>

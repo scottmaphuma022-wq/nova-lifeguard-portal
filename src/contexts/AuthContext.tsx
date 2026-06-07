@@ -6,18 +6,28 @@ type AuthContextType = {
   user: User | null;
   session: Session | null;
   loading: boolean;
+  isAuthenticated: boolean;
+  logout: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   session: null,
   loading: true,
+  isAuthenticated: false,
+  logout: async () => {},
 });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+  };
+
+  const isAuthenticated = !!user;
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -37,7 +47,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, session, loading }}>
+    <AuthContext.Provider value={{ user, session, loading, isAuthenticated, logout }}>
       {children}
     </AuthContext.Provider>
   );

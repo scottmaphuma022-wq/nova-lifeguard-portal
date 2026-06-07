@@ -163,39 +163,6 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
           </Link>
         ))}
       </nav>
-
-      <div className="p-4 border-t border-border space-y-1">
-        <Link
-          to="/profile"
-          className={`flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-            isActive("/profile")
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground"
-          }`}
-        >
-          <User className="h-4 w-4" />
-          Profile
-        </Link>
-        <Link
-          to="/settings"
-          className={`flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-            isActive("/settings")
-              ? "bg-primary text-primary-foreground"
-              : "text-muted-foreground hover:bg-muted hover:text-foreground"
-          }`}
-        >
-          <Settings className="h-4 w-4" />
-          Settings
-        </Link>
-        <Button
-          variant="ghost"
-          className="w-full justify-start text-muted-foreground hover:text-destructive"
-          onClick={handleLogout}
-        >
-          <LogOut className="mr-3 h-4 w-4" />
-          Logout
-        </Button>
-      </div>
     </div>
   );
 

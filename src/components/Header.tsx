@@ -13,10 +13,28 @@ import Logo from './Logo';
 import AuthModal from './AuthModal';
 import { useAuth } from '@/contexts/AuthContext';
 
-const Header = () => {
+interface HeaderProps {
+  authModalOpen?: boolean;
+  setAuthModalOpen?: (open: boolean) => void;
+  authMode?: 'login' | 'signup';
+  setAuthMode?: (mode: 'login' | 'signup') => void;
+}
+
+const Header = ({
+  authModalOpen: controlledOpen,
+  setAuthModalOpen: controlledSetOpen,
+  authMode: controlledMode,
+  setAuthMode: controlledSetMode,
+}: HeaderProps = {}) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [localOpen, setLocalOpen] = useState(false);
+  const [localMode, setLocalMode] = useState<'login' | 'signup'>('login');
+
+  const authModalOpen = controlledOpen !== undefined ? controlledOpen : localOpen;
+  const setAuthModalOpen = controlledSetOpen !== undefined ? controlledSetOpen : setLocalOpen;
+  const authMode = controlledMode !== undefined ? controlledMode : localMode;
+  const setAuthMode = controlledSetMode !== undefined ? controlledSetMode : setLocalMode;
+
   const location = useLocation();
   const navigate = useNavigate();
   const { user, isAuthenticated, logout } = useAuth();

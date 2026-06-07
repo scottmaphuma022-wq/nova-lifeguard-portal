@@ -44,6 +44,14 @@ const StatusIcon = ({ status }: { status: string }) => {
   return <Clock className="w-4 h-4 text-warning" />;
 };
 
+const getCleanCoverName = (type: string) => {
+  if (type === 'funeral') return 'Funeral Expenses Cover';
+  if (type === 'loan') return 'Loan Guard Cover';
+  if (type === 'disability') return 'Permanent Disability Cover';
+  return type ? type.replace(/_/g, ' ').toUpperCase() : 'Insurance Cover';
+};
+
+
 /* ------------------ PDF → IMAGE ------------------ */
 const convertPdfToImage = async (file: File, onProgress: any) => {
   try {
@@ -243,6 +251,22 @@ const CustomerClaims = () => {
         urls.push(urlData.publicUrl);
       }
 
+      // ── Get claims officers for assignment ──
+      let assignedOfficerId = null;
+      try {
+        const { data: officersData } = await supabase
+          .from('userprofile')
+          .select('id')
+          .eq('role', 'claims_officer');
+          
+        if (officersData && officersData.length > 0) {
+          const randomIndex = Math.floor(Math.random() * officersData.length);
+          assignedOfficerId = officersData[randomIndex].id;
+        }
+      } catch (err) {
+        console.error('Failed to fetch claims officers for auto-assignment:', err);
+      }
+
       // ── Insert claim record ──
       const claimNumber = `CLM-${new Date().getFullYear()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
@@ -255,6 +279,7 @@ const CustomerClaims = () => {
         document_url: urls[0] ?? null,
         documents: urls,
         date_applied: new Date().toISOString(),
+        officer_id: assignedOfficerId,
       });
 
       if (insertError) throw new Error(`Failed to save claim: ${insertError.message}`);
@@ -454,7 +479,7 @@ const CustomerClaims = () => {
                     <SelectContent>
                       {covers.map(c => (
                         <SelectItem key={c.id} value={c.id.toString()}>
-                          {c.cover_name || 'Unknown Cover'}
+                          {getCleanCoverName(c.cover_type)}
                         </SelectItem>
                       ))}
                     </SelectContent>

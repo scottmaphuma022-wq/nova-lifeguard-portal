@@ -156,8 +156,10 @@ const ManagerClaims = () => {
   };
 
   const getPublicUrl = (path: string) => {
+    if (!path) return '';
+    if (path.startsWith('http')) return path;
     const { data } = supabase.storage
-      .from('claim-document')
+      .from('claim-documents')
       .getPublicUrl(path);
     return data.publicUrl;
   };

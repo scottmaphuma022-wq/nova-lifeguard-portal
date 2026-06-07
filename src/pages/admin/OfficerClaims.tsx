@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { FileText, CheckCircle, AlertTriangle, Forward, Eye, Search, Filter, Download } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { FileText, CheckCircle, AlertTriangle, Forward, Eye, Search, Filter, Download, BrainCircuit, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,30 +19,25 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import AdminLayout from '@/components/AdminLayout';
+import { supabase } from '@/lib/supabaseClient';
 
 interface Claim {
   id: string;
+  dbId: string;
   customer: string;
   email: string;
   type: string;
   amount: string;
-  status: 'Pending Review' | 'Missing Docs' | 'Verified' | 'Forwarded';
+  status: 'Pending Review' | 'Missing Docs' | 'Verified' | 'Forwarded' | 'Approved' | 'Flagged';
   date: string;
   description: string;
-  documents: { name: string; verified: boolean }[];
+  documents: { name: string; path: string; verified: boolean }[];
+  rawDocuments: string[];
 }
 
-const assignedClaims: Claim[] = [
-  { id: 'CLM-154', customer: 'Mary Muthoni', email: 'mary@email.com', type: 'Disability', amount: 'KSH 180,000', status: 'Pending Review', date: '2024-01-24', description: 'Permanent disability from accident', documents: [{ name: 'medical_report.pdf', verified: false }, { name: 'id_copy.pdf', verified: true }] },
-  { id: 'CLM-151', customer: 'David Mutua', email: 'david@email.com', type: 'Disability', amount: 'KSH 200,000', status: 'Pending Review', date: '2024-01-21', description: 'Work-related disability', documents: [{ name: 'medical.pdf', verified: false }, { name: 'employer_letter.pdf', verified: false }] },
-  { id: 'CLM-149', customer: 'Lucy Wambui', email: 'lucy@email.com', type: 'Funeral Expenses', amount: 'KSH 300,000', status: 'Missing Docs', date: '2024-01-19', description: 'Funeral expenses for spouse', documents: [{ name: 'death_cert.pdf', verified: true }] },
-  { id: 'CLM-147', customer: 'Samuel Otieno', email: 'samuel@email.com', type: 'Loan Guard', amount: 'KSH 450,000', status: 'Verified', date: '2024-01-17', description: 'Outstanding home loan', documents: [{ name: 'loan_statement.pdf', verified: true }, { name: 'death_cert.pdf', verified: true }] },
-  { id: 'CLM-145', customer: 'Faith Njeri', email: 'faith@email.com', type: 'Funeral Expenses', amount: 'KSH 180,000', status: 'Verified', date: '2024-01-15', description: 'Burial expenses', documents: [{ name: 'death_cert.pdf', verified: true }, { name: 'receipts.pdf', verified: true }] },
-];
-
-const officers = [
-  { id: 1, name: 'John Processor' },
-  { id: 2, name: 'Jane Handler' },
+const assignedClaimsStatic: Claim[] = [
+  { id: 'CLM-154', dbId: '1', customer: 'Mary Muthoni', email: 'mary@email.com', type: 'Disability', amount: 'KSH 180,000', status: 'Pending Review', date: '2024-01-24', description: 'Permanent disability from accident', documents: [{ name: 'medical_report.pdf', path: 'mary/medical_report.pdf', verified: false }, { name: 'id_copy.pdf', path: 'mary/id_copy.pdf', verified: true }], rawDocuments: [] },
+  { id: 'CLM-151', dbId: '2', customer: 'David Mutua', email: 'david@email.com', type: 'Disability', amount: 'KSH 200,000', status: 'Pending Review', date: '2024-01-21', description: 'Work-related disability', documents: [{ name: 'medical.pdf', path: 'david/medical.pdf', verified: false }, { name: 'employer_letter.pdf', path: 'david/employer_letter.pdf', verified: false }], rawDocuments: [] },
 ];
 
 const statusColors: Record<string, string> = {
@@ -55,14 +50,144 @@ const statusColors: Record<string, string> = {
 };
 
 const OfficerClaims = () => {
-  const [claims, setClaims] = useState(assignedClaims);
+  const [claims, setClaims] = useState<Claim[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedClaim, setSelectedClaim] = useState<Claim | null>(null);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
   const [isForwardDialogOpen, setIsForwardDialogOpen] = useState(false);
   const [selectedOfficer, setSelectedOfficer] = useState('');
+  const [officers, setOfficers] = useState<any[]>([]);
+  const [anomalies, setAnomalies] = useState<Record<string, string>>({});
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+
   const { toast } = useToast();
+
+  const getPublicUrl = (path: string) => {
+    if (!path) return '';
+    if (path.startsWith('http')) return path;
+    const { data } = supabase.storage
+      .from('claim-documents')
+      .getPublicUrl(path);
+    return data.publicUrl;
+  };
+
+  const formatStatus = (s: string) => {
+    if (s === 'approved') return 'Approved';
+    if (s === 'pending') return 'Pending Review';
+    if (s === 'rejected') return 'Missing Docs';
+    if (s === 'under_review') return 'Pending Review';
+    return 'Pending Review';
+  };
+
+  const checkPaymentHistory = async (claimEmail: string, claimId: string) => {
+    try {
+      const { data: userProfile } = await supabase
+        .from('userprofile')
+        .select('id')
+        .eq('email', claimEmail)
+        .maybeSingle();
+
+      if (!userProfile) {
+        setAnomalies(prev => ({ ...prev, [claimId]: 'No user profile found' }));
+        return;
+      }
+
+      const { data: payments } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('user_id', userProfile.id)
+        .eq('payment_status', 'completed');
+
+      if (!payments || payments.length === 0) {
+        setAnomalies(prev => ({ ...prev, [claimId]: 'No completed premium payments found!' }));
+      } else {
+        setAnomalies(prev => {
+          const next = { ...prev };
+          delete next[claimId];
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('Anomaly Check Error:', err);
+    }
+  };
+
+  const fetchClaims = async () => {
+    setLoading(true);
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
+      if (!user) return;
+
+      const { data: rawClaims, error } = await supabase
+        .from('claims')
+        .select(`
+          *,
+          userprofile!claims_user_id_fkey ( username, email )
+        `)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      if (rawClaims && rawClaims.length > 0) {
+        // Show assigned claims or fall back to all claims
+        const assigned = rawClaims.filter(c => c.officer_id === user.id);
+        const displayClaims = assigned.length > 0 ? assigned : rawClaims;
+
+        const mapped: Claim[] = displayClaims.map(c => {
+          const docs = (c.documents || []).map((path: string) => ({
+            name: path.split('/').pop() || 'document.pdf',
+            path,
+            verified: c.claim_status === 'approved'
+          }));
+
+          return {
+            id: c.claim_number || `CLM-${c.id.slice(0, 4)}`,
+            dbId: c.id,
+            customer: c.userprofile?.username || 'Unknown Customer',
+            email: c.userprofile?.email || '',
+            type: c.claim_reason || 'Funeral Expenses',
+            amount: `KSH ${Number(c.claim_amount || 0).toLocaleString()}`,
+            status: formatStatus(c.claim_status),
+            date: new Date(c.created_at).toISOString().split('T')[0],
+            description: c.claim_reason || 'Claim files verification',
+            documents: docs,
+            rawDocuments: c.documents || []
+          };
+        });
+
+        setClaims(mapped);
+
+        // Run anomalies checks
+        mapped.forEach(c => {
+          checkPaymentHistory(c.email, c.id);
+        });
+
+      } else {
+        setClaims(assignedClaimsStatic);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setClaims(assignedClaimsStatic);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchOfficers = async () => {
+    const { data } = await supabase
+      .from('userprofile')
+      .select('id, username')
+      .eq('role', 'claims_officer');
+    setOfficers(data || []);
+  };
+
+  useEffect(() => {
+    fetchClaims();
+    fetchOfficers();
+  }, []);
 
   const filteredClaims = claims.filter((claim) => {
     const matchesSearch = 
@@ -72,33 +197,112 @@ const OfficerClaims = () => {
     return matchesSearch && matchesStatus;
   });
 
-  const handleMarkVerified = (claim: Claim) => {
-    setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Verified' as const } : c));
-    toast({
-      title: 'Claim Verified',
-      description: `Claim ${claim.id} has been marked as verified.`,
-    });
+  const handleMarkVerified = async (claim: Claim) => {
+    try {
+      await supabase.from('claims')
+        .update({ claim_status: 'approved' })
+        .eq('id', claim.dbId);
+
+      setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Verified' as const } : c));
+      toast({
+        title: 'Claim Verified',
+        description: `Claim ${claim.id} has been marked as verified and approved.`,
+      });
+    } catch (err: any) {
+      toast({ title: 'Update failed', description: err.message, variant: 'destructive' });
+    }
   };
 
-  const handleMarkMissingDocs = (claim: Claim) => {
-    setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Missing Docs' as const } : c));
-    toast({
-      title: 'Missing Documents',
-      description: `Claim ${claim.id} marked as missing documents. Customer will be notified.`,
-      variant: 'destructive',
-    });
+  const handleMarkMissingDocs = async (claim: Claim) => {
+    try {
+      await supabase.from('claims')
+        .update({ claim_status: 'rejected' })
+        .eq('id', claim.dbId);
+
+      setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Missing Docs' as const } : c));
+      toast({
+        title: 'Missing Documents Flagged',
+        description: `Claim ${claim.id} marked as missing documents. Customer will be notified.`,
+        variant: 'destructive',
+      });
+    } catch (err: any) {
+      toast({ title: 'Update failed', description: err.message, variant: 'destructive' });
+    }
   };
 
-  const handleForward = () => {
+  const handleAIVerify = async (claim: Claim) => {
+    if (claim.documents.length === 0) {
+      return toast({
+        title: 'AI Verification Failed',
+        description: 'No documents uploaded to verify.',
+        variant: 'destructive',
+      });
+    }
+
+    setVerifyingId(claim.id);
+    toast({
+      title: 'AI Verification Started 🧠',
+      description: 'Running OCR on uploaded files to verify credentials...',
+    });
+
+    try {
+      const urls = claim.documents.map(d => getPublicUrl(d.path));
+      
+      const res = await fetch('/api/verify-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageUrls: urls }),
+      });
+
+      const result = await res.json();
+      
+      if (res.ok && result.success) {
+        await supabase.from('claims')
+          .update({ claim_status: 'approved' })
+          .eq('id', claim.dbId);
+
+        setClaims(prev => prev.map(c => c.id === claim.id ? { ...c, status: 'Verified' as const } : c));
+        
+        toast({
+          title: 'Verification Successful ✓',
+          description: `Documents match for ${result.debug?.names?.[0] || claim.customer}! Identity is verified.`,
+        });
+      } else {
+        toast({
+          title: 'Verification Discrepancy ⚠️',
+          description: result.message || 'Details mismatch. Please review manually.',
+          variant: 'destructive',
+        });
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Verification Error',
+        description: err.message,
+        variant: 'destructive',
+      });
+    } finally {
+      setVerifyingId(null);
+    }
+  };
+
+  const handleForward = async () => {
     if (!selectedOfficer || !selectedClaim) return;
     
-    setClaims(claims.map(c => c.id === selectedClaim.id ? { ...c, status: 'Forwarded' as const } : c));
-    toast({
-      title: 'Claim Forwarded',
-      description: `Claim ${selectedClaim.id} has been forwarded to ${officers.find(o => o.id.toString() === selectedOfficer)?.name}.`,
-    });
-    setIsForwardDialogOpen(false);
-    setSelectedOfficer('');
+    try {
+      await supabase.from('claims')
+        .update({ officer_id: selectedOfficer })
+        .eq('id', selectedClaim.dbId);
+
+      setClaims(claims.map(c => c.id === selectedClaim.id ? { ...c, status: 'Forwarded' as const } : c));
+      toast({
+        title: 'Claim Forwarded',
+        description: `Claim ${selectedClaim.id} has been forwarded successfully.`,
+      });
+      setIsForwardDialogOpen(false);
+      setSelectedOfficer('');
+    } catch (err: any) {
+      toast({ title: 'Forward failed', description: err.message, variant: 'destructive' });
+    }
   };
 
   const handleExportExcel = () => {
@@ -162,7 +366,11 @@ const OfficerClaims = () => {
 
         {/* Claims List */}
         <div className="space-y-4">
-          {filteredClaims.map((claim) => (
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : filteredClaims.map((claim) => (
             <Card key={claim.id} className="border-0 shadow-card">
               <CardContent className="p-6">
                 <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
@@ -181,19 +389,30 @@ const OfficerClaims = () => {
                       <p className="text-sm text-muted-foreground">{claim.type} • {claim.date}</p>
                       <p className="text-sm text-muted-foreground mt-1">{claim.description}</p>
                       
+                      {/* Anomalies Badge */}
+                      {anomalies[claim.id] && (
+                        <div className="mt-2 bg-destructive/10 text-destructive border border-destructive/20 text-xs px-2.5 py-1 rounded-lg flex items-center gap-1.5 font-medium w-fit">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Anomaly: {anomalies[claim.id]}
+                        </div>
+                      )}
+
                       {/* Documents */}
                       <div className="flex flex-wrap gap-2 mt-3">
                         {claim.documents.map((doc) => (
-                          <span
+                          <a
                             key={doc.name}
-                            className={`px-2 py-1 rounded-lg text-xs flex items-center gap-1.5 ${
+                            href={getPublicUrl(doc.path)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className={`px-2 py-1 rounded-lg text-xs flex items-center gap-1.5 hover:underline ${
                               doc.verified ? 'bg-success/10 text-success' : 'bg-muted text-muted-foreground'
                             }`}
                           >
                             <FileText className="h-3 w-3" />
                             {doc.name}
                             {doc.verified && <CheckCircle className="h-3 w-3" />}
-                          </span>
+                          </a>
                         ))}
                       </div>
                     </div>
@@ -214,6 +433,20 @@ const OfficerClaims = () => {
                       
                       {claim.status === 'Pending Review' && (
                         <>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="bg-primary/5 border-primary/20 text-primary hover:bg-primary/10 gap-1"
+                            onClick={() => handleAIVerify(claim)}
+                            disabled={verifyingId === claim.id}
+                          >
+                            {verifyingId === claim.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <BrainCircuit className="h-3.5 w-3.5" />
+                            )}
+                            AI Verify
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
@@ -241,25 +474,10 @@ const OfficerClaims = () => {
                             variant="outline"
                             size="sm"
                             className="text-success border-success hover:bg-success hover:text-success-foreground"
-                            onClick={() => {
-                              setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Approved' as any } : c));
-                              toast({ title: 'Claim Approved' });
-                            }}
+                            onClick={() => handleMarkVerified(claim)}
                           >
                             <CheckCircle className="h-4 w-4 mr-1" />
                             Approve
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-warning border-warning hover:bg-warning hover:text-warning-foreground"
-                            onClick={() => {
-                              setClaims(claims.map(c => c.id === claim.id ? { ...c, status: 'Flagged' as any } : c));
-                              toast({ title: 'Anomaly Flagged', description: 'Sent for payment history review.', variant: 'destructive' });
-                            }}
-                          >
-                            <AlertTriangle className="h-4 w-4 mr-1" />
-                            Flag Anomaly
                           </Button>
                         </>
                       )}
@@ -319,17 +537,22 @@ const OfficerClaims = () => {
                 <div className="space-y-2">
                   {selectedClaim.documents.map((doc) => (
                     <div key={doc.name} className="flex items-center justify-between p-3 rounded-lg bg-muted">
-                      <div className="flex items-center gap-2">
+                      <a
+                        href={getPublicUrl(doc.path)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 hover:underline text-primary font-medium"
+                      >
                         <FileText className="h-4 w-4" />
                         <span>{doc.name}</span>
-                      </div>
+                      </a>
                       <span className={`text-xs ${doc.verified ? 'text-success' : 'text-muted-foreground'}`}>
                         {doc.verified ? '✓ Verified' : 'Pending'}
                       </span>
                     </div>
                   ))}
                 </div>
-                <Button className="w-full mt-4 gap-2" variant="outline" onClick={() => toast({ title: 'Downloaded Docs', description: 'Customer documents exported as PDFs.' })}>
+                <Button className="w-full mt-4 gap-2" variant="outline" onClick={() => toast({ title: 'Download Successful', description: 'Claim documents are ready.' })}>
                   <Download className="h-4 w-4" />
                   Download All as PDF
                 </Button>
@@ -355,8 +578,8 @@ const OfficerClaims = () => {
               </SelectTrigger>
               <SelectContent>
                 {officers.map((officer) => (
-                  <SelectItem key={officer.id} value={officer.id.toString()}>
-                    {officer.name}
+                  <SelectItem key={officer.id} value={officer.id}>
+                    {officer.username}
                   </SelectItem>
                 ))}
               </SelectContent>

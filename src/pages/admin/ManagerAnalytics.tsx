@@ -1,6 +1,9 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
 import AdminLayout from '@/components/AdminLayout';
+import { Download } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { useToast } from '@/hooks/use-toast';
 
 const claimsByType = [
   { name: 'Funeral', value: 45, color: 'hsl(var(--chart-1))' },
@@ -27,13 +30,69 @@ const customerActivity = [
 ];
 
 const ManagerAnalytics = () => {
+  const { toast } = useToast();
+
+  const handleExportExcel = () => {
+    let csvContent = "data:text/csv;charset=utf-8,";
+    
+    // Summary Metrics
+    csvContent += "SUMMARY METRICS\n";
+    csvContent += "Metric,Value,Trend\n";
+    csvContent += "Total Claims (6mo),199,+23% vs last period\n";
+    csvContent += "Avg. Processing Time,4.2 days,-12% vs last period\n";
+    csvContent += "Approval Rate,78%,+5% vs last period\n";
+    csvContent += "Total Paid Out,KSH 12.5M,+18% vs last period\n\n";
+
+    // Claims by Type
+    csvContent += "CLAIMS BY INSURANCE TYPE\n";
+    csvContent += "Type,Count\n";
+    claimsByType.forEach(c => {
+      csvContent += `${c.name},${c.value}\n`;
+    });
+    csvContent += "\n";
+
+    // Monthly Claims
+    csvContent += "MONTHLY CLAIMS TREND\n";
+    csvContent += "Month,Total Claims,Approved Claims,Rejected Claims\n";
+    claimsByMonth.forEach(c => {
+      csvContent += `${c.month},${c.claims},${c.approved},${c.rejected}\n`;
+    });
+    csvContent += "\n";
+
+    // Customer Activity
+    csvContent += "CUSTOMER GROWTH & ACTIVITY\n";
+    csvContent += "Month,New Customers,Active Claims\n";
+    customerActivity.forEach(c => {
+      csvContent += `${c.month},${c.newCustomers},${c.activeClaims}\n`;
+    });
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "nova_insurance_analytics_report.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    toast({
+      title: 'Report Exported Successfully',
+      description: 'Analytics data has been exported to an Excel-compatible CSV file.',
+    });
+  };
+
   return (
     <AdminLayout role="manager">
       <div className="space-y-6">
         {/* Header */}
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold">Analytics</h1>
-          <p className="text-muted-foreground">Insights and trends from claims data</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl lg:text-3xl font-bold">Analytics</h1>
+            <p className="text-muted-foreground text-sm mt-0.5">Insights and trends from claims data</p>
+          </div>
+          <Button onClick={handleExportExcel} variant="outline" className="gap-2">
+            <Download className="h-4 w-4" />
+            Export Report
+          </Button>
         </div>
 
         {/* Summary Cards */}

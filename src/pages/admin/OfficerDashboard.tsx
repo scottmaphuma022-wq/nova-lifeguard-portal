@@ -43,37 +43,50 @@ const OfficerDashboard = () => {
   const fetchClaims = async () => {
     setLoading(true);
 
-    const { data, error } = await supabase
-      .from("claims")
-      .select(`
-        id,
-        claim_number,
-        claim_amount,
-        claim_status,
-        document_status,
-        claim_reason,
-        created_at,
-        userprofile (
-          username
-        )
-      `)
-      .order("created_at", { ascending: false });
+    try {
+      const { data: userData } = await supabase.auth.getUser();
+      const user = userData?.user;
+      if (!user) {
+        setLoading(false);
+        return;
+      }
 
-    if (!error && data) {
-      setClaims(data);
+      const { data, error } = await supabase
+        .from("claims")
+        .select(`
+          id,
+          claim_number,
+          claim_amount,
+          claim_status,
+          document_status,
+          claim_reason,
+          created_at,
+          officer_id,
+          userprofile (
+            username
+          )
+        `)
+        .order("created_at", { ascending: false });
 
-      // COMPUTE STATS
-      const total = data.length;
-      const pending = data.filter(c => c.claim_status === "pending").length;
-      const approved = data.filter(c => c.claim_status === "approved").length;
-      const missing = data.filter(c => c.document_status === "rejected").length;
+      if (!error && data) {
+        const assignedClaims = data.filter(c => c.officer_id === user.id);
+        setClaims(assignedClaims);
 
-      setStats([
-        { title: "Assigned Claims", value: String(total), icon: FileText, trend: "", color: "primary" },
-        { title: "Pending Review", value: String(pending), icon: Clock, trend: "Action needed", color: "warning" },
-        { title: "Completed", value: String(approved), icon: CheckCircle, trend: "Processed", color: "success" },
-        { title: "Missing Docs", value: String(missing), icon: AlertTriangle, trend: "Follow up", color: "destructive" },
-      ]);
+        // COMPUTE STATS
+        const total = assignedClaims.length;
+        const pending = assignedClaims.filter(c => c.claim_status === "pending").length;
+        const approved = assignedClaims.filter(c => c.claim_status === "approved").length;
+        const missing = assignedClaims.filter(c => c.document_status === "rejected").length;
+
+        setStats([
+          { title: "Assigned Claims", value: String(total), icon: FileText, trend: "", color: "primary" },
+          { title: "Pending Review", value: String(pending), icon: Clock, trend: "Action needed", color: "warning" },
+          { title: "Completed", value: String(approved), icon: CheckCircle, trend: "Processed", color: "success" },
+          { title: "Missing Docs", value: String(missing), icon: AlertTriangle, trend: "Follow up", color: "destructive" },
+        ]);
+      }
+    } catch (err) {
+      console.error("Failed to fetch dashboard data:", err);
     }
 
     setLoading(false);
@@ -125,7 +138,7 @@ const OfficerDashboard = () => {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-2xl lg:text-3xl font-bold">Claims Officer Dashboard</h1>
+            <h1 className="text-2xl lg:text-3xl font-bold">Claims Officer</h1>
             <p className="text-muted-foreground">Process and verify assigned insurance claims</p>
           </div>
           <Button onClick={() => navigate("/novaportal/officer/claims")}>

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { 
   FileText, CreditCard, Clock, Shield, AlertCircle, CheckCircle, 
-  XCircle, FileUp, Bell, ChevronRight, Activity, Upload, X
+  XCircle, FileUp, ChevronRight, Upload
 } from 'lucide-react';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import DashboardLayout from '@/components/DashboardLayout';
@@ -70,40 +70,47 @@ const CustomerDashboard = () => {
 
       if (profile) setUsername(profile.username);
 
-      const { data: claims = [] } = await supabase
+      const { data: claimsData } = await supabase
         .from('claims')
         .select('id, claim_number, claim_amount, claim_status, claim_reason, date_applied')
         .eq('user_id', user.id)
         .order('date_applied', { ascending: false });
 
-      const { data: payments = [] } = await supabase
+      const claimsList = claimsData || [];
+
+      const { data: paymentsData } = await supabase
         .from('payments')
         .select(`
           amount_paid,
           cover_id,
-          date_paid,
-          covers ( cover_name, price )
+          payment_date,
+          plan_tier,
+          payment_status,
+          cover:cover_id ( id, cover_name, price )
         `)
         .eq('user_id', user.id)
-        .order('date_paid', { ascending: false });
+        .eq('payment_status', 'completed')
+        .order('payment_date', { ascending: false });
 
-      const totalPaid = payments.reduce((sum, p) => sum + Number(p.amount_paid), 0);
-      const pendingClaims = claims.filter((c) => c.claim_status === 'pending').length;
-      const rejectedClaims = claims.filter((c) => c.claim_status === 'rejected').length;
+      const paymentsList = paymentsData || [];
+
+      const totalPaid = paymentsList.reduce((sum, p: any) => sum + Number(p.amount_paid), 0);
+      const pendingClaims = claimsList.filter((c) => c.claim_status === 'pending').length;
+      const rejectedClaims = claimsList.filter((c) => c.claim_status === 'rejected').length;
       
       // Calculate unique policies (covers paid for)
-      const uniqueCovers = new Set(payments.map(p => p.cover_id));
+      const uniqueCovers = new Set(paymentsList.map((p: any) => p.cover_id));
 
       setStats({
-        activePolicies: uniqueCovers.size > 0 ? uniqueCovers.size : 2, // fallback to 2 for demo if none
-        totalClaims: claims.length > 0 ? claims.length : 3,
-        pendingClaims: pendingClaims > 0 ? pendingClaims : 1,
-        totalPaid: totalPaid > 0 ? totalPaid : 250000,
-        rejectedClaims: rejectedClaims,
+        activePolicies: uniqueCovers.size,
+        totalClaims: claimsList.length,
+        pendingClaims,
+        totalPaid,
+        rejectedClaims,
       });
 
       setRecentClaims(
-        claims.slice(0, 3).map((c) => ({
+        claimsList.slice(0, 3).map((c) => ({
           id: c.claim_number,
           type: c.claim_reason,
           amount: formatCurrency(Number(c.claim_amount)),
@@ -111,41 +118,29 @@ const CustomerDashboard = () => {
           date: new Date(c.date_applied).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
         }))
       );
-      
-      // Fallback for demo if no real claims
-      if (claims.length === 0) {
-        setRecentClaims([
-          { id: 'CLM-2024-0003', type: 'Funeral Expenses', amount: 'KES 50,000', status: 'pending', date: '10 May 2024' },
-          { id: 'CLM-2024-0002', type: 'Loan Guard Policy', amount: 'KES 120,000', status: 'approved', date: '20 Apr 2024' },
-          { id: 'CLM-2024-0001', type: 'Permanent Disability', amount: 'KES 250,000', status: 'paid', date: '15 Feb 2024' },
-        ]);
-      }
 
       setRecentPayments(
-         payments.slice(0, 3).map((p) => ({
-             date: new Date(p.date_paid).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+         paymentsList.slice(0, 3).map((p: any) => ({
+             date: new Date(p.payment_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
              amount: formatCurrency(Number(p.amount_paid)),
              status: 'Paid'
          }))
       );
-      
-      if (payments.length === 0) {
-          setRecentPayments([
-              { date: '12 May 2024', amount: 'KES 1,500', status: 'Paid' },
-              { date: '12 Apr 2024', amount: 'KES 1,500', status: 'Paid' },
-              { date: '12 Mar 2024', amount: 'KES 1,500', status: 'Paid' },
-          ]);
-      }
 
-      // Mock active policy
-      setActivePolicy({
-        policyNumber: 'POL-2024-001256',
-        coverType: 'Funeral Expenses Cover',
-        plan: 'Standard',
-        coverageAmount: 'KES 200,000',
-        startDate: '12 Jan 2024',
-        nextPremiumDue: '12 Jun 2024 (in 18 days)'
-      });
+      // Live active policy setting
+      if (paymentsList.length > 0) {
+        const latest = paymentsList[0];
+        setActivePolicy({
+          policyNumber: `POL-2024-00${latest.cover?.id || '1256'}`,
+          coverType: latest.cover?.cover_name || 'Active Policy',
+          plan: latest.plan_tier || 'Standard',
+          coverageAmount: formatCurrency(Number(latest.amount_paid) * 125),
+          startDate: new Date(latest.payment_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+          nextPremiumDue: 'Flexible Premium'
+        });
+      } else {
+        setActivePolicy(null);
+      }
 
     };
 
@@ -312,44 +307,52 @@ const CustomerDashboard = () => {
             
             {/* My Active Policy */}
             <Card className="shadow-sm border-border/50">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-base">My Active Policy</CardTitle>
+              <CardHeader className="pb-3 border-b border-border/50">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Shield className="w-5 h-5 text-primary" />
+                  My Active Policy
+                </CardTitle>
               </CardHeader>
-              <CardContent>
-                 <div className="bg-muted/30 rounded-xl p-5 flex flex-col md:flex-row gap-6 items-center">
-                    <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center shrink-0 border border-primary/20">
-                        <Shield className="w-10 h-10 text-primary" />
+              <CardContent className="pt-4">
+                {activePolicy ? (
+                  <div className="bg-muted/30 rounded-xl p-5 flex flex-col md:flex-row gap-4 items-center">
+                    <div className="flex-1 w-full grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Policy Number</p>
+                        <p className="font-semibold text-foreground mt-0.5">{activePolicy.policyNumber}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Cover Type</p>
+                        <p className="font-semibold text-foreground mt-0.5">{activePolicy.coverType}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Plan Tier</p>
+                        <Badge variant="secondary" className="bg-primary/10 text-primary hover:bg-primary/20 mt-0.5 capitalize w-fit">
+                          {activePolicy.plan}
+                        </Badge>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Coverage Amount</p>
+                        <p className="font-semibold text-success mt-0.5">{activePolicy.coverageAmount}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Start Date</p>
+                        <p className="font-medium text-foreground mt-0.5">{activePolicy.startDate}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Next Premium Due</p>
+                        <p className="font-medium text-destructive mt-0.5">{activePolicy.nextPremiumDue}</p>
+                      </div>
                     </div>
-                    <div className="flex-1 w-full grid grid-cols-2 md:grid-cols-4 gap-4">
-                        <div className="col-span-2">
-                            <p className="text-xs text-muted-foreground mb-1">Policy Number</p>
-                            <p className="font-semibold">{activePolicy?.policyNumber}</p>
-                        </div>
-                        <div className="col-span-2">
-                            <p className="text-xs text-muted-foreground mb-1">Cover Type</p>
-                            <p className="font-semibold">{activePolicy?.coverType}</p>
-                        </div>
-                        <div>
-                            <p className="text-xs text-muted-foreground mb-1">Plan</p>
-                            <Badge variant="secondary" className="bg-primary/10 text-primary hover:bg-primary/20">{activePolicy?.plan}</Badge>
-                        </div>
-                        <div>
-                            <p className="text-xs text-muted-foreground mb-1">Coverage Amount</p>
-                            <p className="font-semibold text-success">{activePolicy?.coverageAmount}</p>
-                        </div>
-                        <div>
-                            <p className="text-xs text-muted-foreground mb-1">Start Date</p>
-                            <p className="font-semibold text-sm">{activePolicy?.startDate}</p>
-                        </div>
-                        <div>
-                            <p className="text-xs text-muted-foreground mb-1">Next Premium Due</p>
-                            <p className="font-semibold text-sm text-destructive">{activePolicy?.nextPremiumDue}</p>
-                        </div>
-                    </div>
-                 </div>
-                 <div className="mt-4">
-                     <Button className="bg-primary hover:bg-primary/90 text-white rounded-md" onClick={() => navigate('/policies')}>View Policy Details</Button>
-                 </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-6">
+                    <p className="text-sm text-muted-foreground font-medium">No active policies found</p>
+                    <Button size="sm" className="mt-3 bg-primary hover:bg-primary/90" onClick={() => navigate('/policies')}>
+                      Get Protected Now
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -395,79 +398,35 @@ const CustomerDashboard = () => {
               </CardContent>
             </Card>
 
-            {/* Documents Required */}
-            <Card className="shadow-sm border-border/50 bg-warning/5 border-warning/20">
-                <CardContent className="p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                    <div className="flex items-start gap-4">
-                        <div className="w-10 h-10 rounded-full bg-warning/20 flex items-center justify-center shrink-0">
-                            <FileUp className="w-5 h-5 text-warning" />
-                        </div>
-                        <div>
-                            <h4 className="font-semibold text-sm">Claim CLM-2024-0003</h4>
-                            <p className="text-xs text-muted-foreground mt-1 mb-3">Please upload the following documents to continue processing your claim.</p>
-                            <div className="flex flex-wrap gap-2">
-                                <Badge variant="outline" className="bg-white text-xs py-0.5"><span className="w-1.5 h-1.5 rounded-full bg-destructive mr-1.5 inline-block"></span>Death Certificate</Badge>
-                                <Badge variant="outline" className="bg-white text-xs py-0.5"><span className="w-1.5 h-1.5 rounded-full bg-destructive mr-1.5 inline-block"></span>ID Copy</Badge>
-                                <Badge variant="outline" className="bg-white text-xs py-0.5"><span className="w-1.5 h-1.5 rounded-full bg-destructive mr-1.5 inline-block"></span>Medical Report</Badge>
-                            </div>
-                        </div>
-                    </div>
-                    <Button
-                      className="bg-primary hover:bg-primary/90 shrink-0 w-full sm:w-auto mt-2 sm:mt-0"
-                      onClick={() => setUploadOpen(true)}
-                    >
-                      <Upload className="w-4 h-4 mr-2" /> Upload Now
-                    </Button>
-                </CardContent>
-            </Card>
-
-            {/* Activity Feed (Moved to left column for balance) */}
+            {/* Payments */}
             <Card className="shadow-sm border-border/50">
-                <CardHeader className="flex flex-row items-center justify-between pb-3">
-                    <CardTitle className="text-base">Activity Feed</CardTitle>
-                    <Link to="/claims" className="text-xs text-primary hover:underline">View all</Link>
+                <CardHeader className="flex flex-row items-center justify-between pb-3 border-b border-border/50">
+                    <CardTitle className="text-base">Payments & Premium Status</CardTitle>
+                    <Link to="/payments" className="text-xs text-primary hover:underline flex items-center">
+                        View all payments <ChevronRight className="w-3 h-3 ml-1" />
+                    </Link>
                 </CardHeader>
-                <CardContent className="space-y-0 relative">
-                    <div className="absolute left-[21px] top-4 bottom-4 w-px bg-border/80"></div>
-                    
-                    <div className="flex gap-4 pb-4 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
-                            <Activity className="w-3 h-3" />
-                        </div>
-                        <div>
-                            <p className="text-sm">You submitted claim <strong>CLM-2024-0003</strong></p>
-                            <p className="text-xs text-muted-foreground mt-0.5">10 May 2024, 10:30 AM</p>
-                        </div>
-                    </div>
-                    
-                    <div className="flex gap-4 pb-4 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
-                            <Activity className="w-3 h-3" />
-                        </div>
-                        <div>
-                            <p className="text-sm">Document uploaded for claim <strong>CLM-2024-0002</strong></p>
-                            <p className="text-xs text-muted-foreground mt-0.5">22 Apr 2024, 11:15 AM</p>
-                        </div>
-                    </div>
-                    
-                    <div className="flex gap-4 pb-4 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-success text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
-                            <CheckCircle className="w-3 h-3" />
-                        </div>
-                        <div>
-                            <p className="text-sm">Claim <strong>CLM-2024-0002</strong> approved</p>
-                            <p className="text-xs text-muted-foreground mt-0.5">25 Apr 2024, 02:20 PM</p>
-                        </div>
-                    </div>
-                    
-                    <div className="flex gap-4 relative z-10">
-                        <div className="w-6 h-6 rounded-full bg-primary text-white flex items-center justify-center shrink-0 border-[3px] border-background mt-1">
-                            <CreditCard className="w-3 h-3" />
-                        </div>
-                        <div>
-                            <p className="text-sm">Payment of KES 200,000 completed for claim <strong>CLM-2024-0001</strong></p>
-                            <p className="text-xs text-muted-foreground mt-0.5">20 Feb 2024, 09:45 AM</p>
-                        </div>
+                <CardContent className="space-y-6 pt-4">
+                    <div>
+                        <p className="text-xs font-semibold text-muted-foreground mb-3">Recent Payments</p>
+                        {recentPayments.length > 0 ? (
+                          <div className="space-y-3">
+                              {recentPayments.map((payment, index) => (
+                                  <div key={index} className="flex justify-between items-center pb-2 border-b border-border/50 last:border-0 last:pb-0">
+                                      <p className="text-sm text-muted-foreground">{payment.date}</p>
+                                      <div className="flex items-center gap-3">
+                                          <p className="text-sm font-medium">{payment.amount}</p>
+                                          <Badge variant="outline" className="bg-success/10 text-success border-success/20 py-0 text-[10px]">{payment.status}</Badge>
+                                      </div>
+                                  </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <div className="text-center py-4">
+                            <p className="text-sm text-muted-foreground">No payments recorded yet.</p>
+                            <Button size="sm" className="mt-3 bg-primary hover:bg-primary/90" onClick={() => navigate('/payments')}>Make a Payment</Button>
+                          </div>
+                        )}
                     </div>
                 </CardContent>
             </Card>
@@ -518,79 +477,42 @@ const CustomerDashboard = () => {
                     <Link to="/claims" className="text-xs text-primary hover:underline">View all</Link>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 rounded-full bg-warning/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <AlertCircle className="w-4 h-4 text-warning" />
-                        </div>
-                        <div>
-                            <p className="text-sm">Your claim <strong>CLM-2024-0003</strong> requires additional documents.</p>
-                            <p className="text-xs text-muted-foreground mt-1">2 hours ago</p>
-                        </div>
-                    </div>
-                    <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 rounded-full bg-success/10 flex items-center justify-center shrink-0 mt-0.5">
+                  {recentClaims.length > 0 ? (
+                    recentClaims.map((claim, index) => (
+                      <div key={index} className="flex items-start gap-3">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
+                          claim.status === 'approved' || claim.status === 'paid'
+                            ? 'bg-success/10'
+                            : claim.status === 'rejected'
+                            ? 'bg-destructive/10'
+                            : 'bg-warning/10'
+                        }`}>
+                          {claim.status === 'approved' || claim.status === 'paid' ? (
                             <CheckCircle className="w-4 h-4 text-success" />
+                          ) : claim.status === 'rejected' ? (
+                            <AlertCircle className="w-4 h-4 text-destructive" />
+                          ) : (
+                            <AlertCircle className="w-4 h-4 text-warning" />
+                          )}
                         </div>
                         <div>
-                            <p className="text-sm">Payment of <strong>KES 1,500</strong> was successful. Thank you!</p>
-                            <p className="text-xs text-muted-foreground mt-1">1 day ago</p>
+                          <p className="text-sm">
+                            Claim <strong>{claim.id}</strong>{' '}
+                            {claim.status === 'pending'
+                              ? 'is awaiting review.'
+                              : claim.status === 'approved'
+                              ? 'has been approved.'
+                              : claim.status === 'paid'
+                              ? 'payment has been disbursed.'
+                              : 'was rejected.'}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">{claim.date}</p>
                         </div>
-                    </div>
-                    <div className="flex items-start gap-3">
-                        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
-                            <Shield className="w-4 h-4 text-primary" />
-                        </div>
-                        <div>
-                            <p className="text-sm">Your policy <strong>POL-2024-001256</strong> is active.</p>
-                            <p className="text-xs text-muted-foreground mt-1">3 days ago</p>
-                        </div>
-                    </div>
-                    <div className="pt-2 text-center border-t border-border/50">
-                        <Link to="/claims" className="text-xs text-primary hover:underline flex items-center justify-center">
-                            View all notifications <ChevronRight className="w-3 h-3 ml-1" />
-                        </Link>
-                    </div>
-                </CardContent>
-            </Card>
-
-            {/* Payments */}
-            <Card className="shadow-sm border-border/50">
-                <CardHeader className="flex flex-row items-center justify-between pb-3">
-                    <CardTitle className="text-base">Payments</CardTitle>
-                    <Link to="/payments" className="text-xs text-primary hover:underline flex items-center">
-                        View all payments <ChevronRight className="w-3 h-3 ml-1" />
-                    </Link>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="bg-muted/30 p-4 rounded-xl border border-border/50">
-                        <p className="text-sm font-semibold mb-2">Premium Due</p>
-                        <div className="flex justify-between items-end mb-3">
-                            <div>
-                                <p className="text-xs text-muted-foreground">Amount</p>
-                                <p className="font-bold">KES 1,500</p>
-                            </div>
-                            <div className="text-right">
-                                <p className="text-xs text-muted-foreground">Due Date</p>
-                                <p className="text-xs text-destructive font-medium">12 Jun 2024 (in 18 days)</p>
-                            </div>
-                        </div>
-                        <Button size="sm" className="w-full bg-primary hover:bg-primary/90" onClick={() => navigate('/payments')}>Pay Now</Button>
-                    </div>
-                    
-                    <div>
-                        <p className="text-xs font-semibold text-muted-foreground mb-3">Recent Payments</p>
-                        <div className="space-y-3">
-                            {recentPayments.map((payment, index) => (
-                                <div key={index} className="flex justify-between items-center pb-2 border-b border-border/50 last:border-0 last:pb-0">
-                                    <p className="text-sm text-muted-foreground">{payment.date}</p>
-                                    <div className="flex items-center gap-3">
-                                        <p className="text-sm font-medium">{payment.amount}</p>
-                                        <Badge variant="outline" className="bg-success/10 text-success border-success/20 py-0 text-[10px]">{payment.status}</Badge>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-muted-foreground text-center py-4">No notifications yet.</p>
+                  )}
                 </CardContent>
             </Card>
             
