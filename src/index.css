@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+/* Google Fonts are loaded via <link rel="preload"> in index.html — not here,
+   to avoid the render-blocking @import penalty. */
 
 @tailwind base;
 @tailwind components;
@@ -247,6 +248,22 @@
     to {
       opacity: 1;
       transform: scale(1);
+    }
+  }
+
+  /* ChatBot popup open — replaces GSAP animation */
+  .animate-chatOpen {
+    animation: chatOpen 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  @keyframes chatOpen {
+    from {
+      opacity: 0;
+      transform: scale(0.92) translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1) translateY(0);
     }
   }
 }

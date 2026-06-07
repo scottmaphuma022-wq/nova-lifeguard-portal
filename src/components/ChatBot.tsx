@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect } from 'react';
-import { gsap } from 'gsap';
 import { MessageCircle, X, Send, Bot, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -49,20 +48,7 @@ const ChatBot = () => {
   ]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const chatRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (chatRef.current) {
-      if (isOpen) {
-        gsap.fromTo(
-          chatRef.current,
-          { opacity: 0, scale: 0.9, y: 20 },
-          { opacity: 1, scale: 1, y: 0, duration: 0.3, ease: 'power2.out' }
-        );
-      }
-    }
-  }, [isOpen]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -116,11 +102,10 @@ const ChatBot = () => {
         )}
       </button>
 
-      {/* Chat Window */}
+      {/* Chat Window — CSS open animation, no GSAP needed */}
       {isOpen && (
         <div
-          ref={chatRef}
-          className="fixed bottom-24 right-6 z-50 w-[360px] max-w-[calc(100vw-3rem)] bg-card rounded-2xl shadow-xl border border-border overflow-hidden"
+          className="fixed bottom-24 right-6 z-50 w-[360px] max-w-[calc(100vw-3rem)] bg-card rounded-2xl shadow-xl border border-border overflow-hidden animate-chatOpen"
         >
           {/* Header */}
           <div className="teal-gradient-bg p-4">

@@ -66,7 +66,8 @@ const OfficerDashboard = () => {
             username
           )
         `)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .limit(100);
 
       if (!error && data) {
         const assignedClaims = data.filter(c => c.officer_id === user.id);
