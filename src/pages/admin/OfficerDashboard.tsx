@@ -62,11 +62,11 @@ const OfficerDashboard = () => {
           claim_reason,
           created_at,
           officer_id,
-          userprofile (
+          userprofile!claims_user_id_fkey (
             username
           )
         `)
-        .eq("officer_id", uid)           // filter server-side, not in JS
+        .eq("officer_id", uid)
         .order("created_at", { ascending: false })
         .limit(100);
 
