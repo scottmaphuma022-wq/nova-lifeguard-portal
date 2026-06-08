@@ -6,161 +6,222 @@ import {
 import { Button } from '@/components/ui/button';
 import { supabase } from '@/lib/supabaseClient';
 
-/* ─── Types ─────────────────────────────────────────────────────────────────── */
-type VerificationStep = 'intro' | 'verifying' | 'result';
-type VerificationStatus = 'Approved' | 'Declined' | 'Resubmission_Required' | 'In_Progress' | null;
+type VerificationStep = 'intro' | 'waiting' | 'result';
+type KycDecision = 'Approved' | 'Declined' | 'Resubmission_Required' | null;
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  /** Called immediately when Didit returns Approved */
   onVerified?: () => void;
 }
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? '';
 
-async function createDiditSession(userId: string) {
-  const res = await fetch(`${BACKEND_URL}/api/didit-session`, {
+/* ─── API helpers ───────────────────────────────────────────────────────────── */
+async function createSession(userId: string) {
+  const r = await fetch(`${BACKEND_URL}/api/didit-session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ userId }),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Server error ${res.status}`);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error ?? `Server error ${r.status}`);
+  return body as { sessionId: string; verificationUrl: string };
+}
+
+async function checkStatus(sessionId: string): Promise<KycDecision> {
+  try {
+    const r = await fetch(`${BACKEND_URL}/api/didit-session?sessionId=${encodeURIComponent(sessionId)}`);
+    if (!r.ok) return null;
+    const body = await r.json();
+    // Didit may return { status } at root level OR nested under { decision: { status } }
+    const raw: string | undefined = body?.status ?? body?.decision?.status ?? body?.kyc_decision;
+    if (!raw || raw === 'In_Progress' || raw === 'in_progress') return null;
+    if (raw === 'Approved' || raw === 'approved') return 'Approved';
+    if (raw === 'Declined' || raw === 'declined') return 'Declined';
+    if (raw === 'Resubmission_Required') return 'Resubmission_Required';
+    return null;
+  } catch {
+    return null;
   }
-  return res.json() as Promise<{ sessionId: string; verificationUrl: string }>;
 }
 
-async function pollDiditSession(sessionId: string): Promise<{ status: VerificationStatus }> {
-  const res = await fetch(`${BACKEND_URL}/api/didit-session?sessionId=${sessionId}`);
-  if (!res.ok) return { status: null };
-  const data = await res.json();
-  return { status: data?.decision?.status ?? data?.status ?? null };
+async function saveKycStatus(userId: string, sessionId: string, decision: KycDecision) {
+  const kycStatus =
+    decision === 'Approved' ? 'approved'
+    : decision === 'Declined' ? 'declined'
+    : decision === 'Resubmission_Required' ? 'resubmission_required'
+    : 'pending';
+  try {
+    await supabase.from('userprofile').update({
+      kyc_status: kycStatus,
+      kyc_session_id: sessionId,
+      ...(kycStatus === 'approved' ? { kyc_verified_at: new Date().toISOString() } : {}),
+    }).eq('id', userId);
+  } catch {
+    // Silently skip if columns don't exist yet — status still shows in UI via local state
+  }
 }
 
-/* ─── Main component ────────────────────────────────────────────────────────── */
+/* ─── Component ─────────────────────────────────────────────────────────────── */
 export default function DiditVerificationModal({ open, onClose, onVerified }: Props) {
   const [step, setStep] = useState<VerificationStep>('intro');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [verificationUrl, setVerificationUrl] = useState<string | null>(null);
-  const [status, setStatus] = useState<VerificationStatus>(null);
+  const [decision, setDecision] = useState<KycDecision>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pollCount, setPollCount] = useState(0);
+  const [popupClosed, setPopupClosed] = useState(false);
   const popupRef = useRef<Window | null>(null);
+  const userIdRef = useRef<string | null>(null);
 
-  /* ── Reset on close ── */
+  /* ── Reset everything when modal is closed ── */
   useEffect(() => {
     if (!open) {
+      popupRef.current?.close();
       const t = setTimeout(() => {
         setStep('intro');
         setSessionId(null);
         setVerificationUrl(null);
-        setStatus(null);
-        setError(null);
+        setDecision(null);
         setLoading(false);
+        setError(null);
         setPollCount(0);
-        popupRef.current?.close();
+        setPopupClosed(false);
         popupRef.current = null;
       }, 300);
       return () => clearTimeout(t);
     }
   }, [open]);
 
-  /* ── Poll for session status while verifying ── */
+  /* ── Core: detect popup close + poll status ── */
   useEffect(() => {
-    if (step !== 'verifying' || !sessionId) return;
+    if (step !== 'waiting' || !sessionId) return;
 
-    const interval = setInterval(async () => {
-      try {
-        const result = await pollDiditSession(sessionId);
-        setPollCount((c) => c + 1);
+    let done = false;
 
-        if (result.status && result.status !== 'In_Progress') {
-          clearInterval(interval);
-          popupRef.current?.close();
+    const finish = async (d: KycDecision) => {
+      if (done) return;
+      done = true;
+      popupRef.current?.close();
+      if (userIdRef.current) await saveKycStatus(userIdRef.current, sessionId, d);
+      setDecision(d);
+      setStep('result');
+      if (d === 'Approved') onVerified?.();
+    };
 
-          const { data: { user } } = await supabase.auth.getUser();
-          if (user) {
-            const kycStatus =
-              result.status === 'Approved' ? 'approved'
-              : result.status === 'Declined' ? 'declined'
-              : result.status === 'Resubmission_Required' ? 'resubmission_required'
-              : 'under_review';
+    // 1) Poll Didit every 6 seconds
+    const pollInterval = setInterval(async () => {
+      if (done) return;
+      const d = await checkStatus(sessionId);
+      setPollCount((c) => c + 1);
+      if (d !== null) {
+        clearInterval(pollInterval);
+        clearInterval(popupCheckInterval);
+        await finish(d);
+      }
+    }, 6000);
 
-            await supabase.from('userprofile').update({
-              kyc_status: kycStatus,
-              kyc_session_id: sessionId,
-              ...(kycStatus === 'approved' ? { kyc_verified_at: new Date().toISOString() } : {}),
-            }).eq('id', user.id);
-          }
+    // 2) Detect when the popup window closes
+    const popupCheckInterval = setInterval(() => {
+      if (done) return;
+      if (popupRef.current?.closed) {
+        setPopupClosed(true);
+        // Don't auto-close modal — user may have closed popup early; keep polling
+      }
+    }, 1000);
 
-          setStatus(result.status);
-          setStep('result');
-          if (result.status === 'Approved') onVerified?.();
-        }
-      } catch { /* keep polling */ }
-    }, 5000);
+    // 3) Check status when user focuses back on this tab
+    const onFocus = async () => {
+      if (done) return;
+      const d = await checkStatus(sessionId);
+      if (d !== null) {
+        clearInterval(pollInterval);
+        clearInterval(popupCheckInterval);
+        await finish(d);
+      }
+    };
+    window.addEventListener('focus', onFocus);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(pollInterval);
+      clearInterval(popupCheckInterval);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [step, sessionId, onVerified]);
 
-  const handleStartVerification = async () => {
+  /* ── Handlers ── */
+  const handleStart = async () => {
     setLoading(true);
     setError(null);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('You must be logged in.');
+      if (!user) throw new Error('You must be logged in to verify.');
+      userIdRef.current = user.id;
 
-      const { sessionId: sid, verificationUrl: url } = await createDiditSession(user.id);
+      const { sessionId: sid, verificationUrl: url } = await createSession(user.id);
       setSessionId(sid);
       setVerificationUrl(url);
 
-      // Open the Didit URL in a popup window
-      const popup = window.open(
-        url,
-        'didit-verification',
-        'width=520,height=700,top=100,left=200,scrollbars=yes,resizable=yes',
-      );
+      // Open popup — centre it on screen
+      const w = 540, h = 700;
+      const left = Math.round((window.screen.width - w) / 2);
+      const top = Math.round((window.screen.height - h) / 4);
+      const popup = window.open(url, 'didit_kyc', `width=${w},height=${h},left=${left},top=${top},scrollbars=yes`);
       if (popup) {
+        popup.focus();
         popupRef.current = popup;
       }
 
-      // Save pending status
-      await supabase.from('userprofile').update({
-        kyc_status: 'pending',
-        kyc_session_id: sid,
-      }).eq('id', user.id);
+      // Save pending status without blocking the UI
+      saveKycStatus(user.id, sid, null).catch(() => {});
 
-      setStep('verifying');
+      setPopupClosed(false);
+      setStep('waiting');
     } catch (err: any) {
-      setError(err.message || 'Something went wrong. Please try again.');
+      setError(err.message ?? 'Something went wrong. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  const reopenPopup = () => {
+  const handleReopenPopup = () => {
     if (!verificationUrl) return;
     if (popupRef.current && !popupRef.current.closed) {
       popupRef.current.focus();
     } else {
-      const popup = window.open(
-        verificationUrl,
-        'didit-verification',
-        'width=520,height=700,top=100,left=200,scrollbars=yes,resizable=yes',
-      );
-      if (popup) popupRef.current = popup;
+      const w = 540, h = 700;
+      const left = Math.round((window.screen.width - w) / 2);
+      const top = Math.round((window.screen.height - h) / 4);
+      const p = window.open(verificationUrl, 'didit_kyc', `width=${w},height=${h},left=${left},top=${top},scrollbars=yes`);
+      if (p) { p.focus(); popupRef.current = p; setPopupClosed(false); }
+    }
+  };
+
+  const handleCheckNow = async () => {
+    if (!sessionId) return;
+    setLoading(true);
+    const d = await checkStatus(sessionId);
+    setLoading(false);
+    if (d !== null) {
+      popupRef.current?.close();
+      if (userIdRef.current) await saveKycStatus(userIdRef.current, sessionId, d);
+      setDecision(d);
+      setStep('result');
+      if (d === 'Approved') onVerified?.();
     }
   };
 
   const handleRetry = () => {
+    popupRef.current?.close();
     setStep('intro');
     setSessionId(null);
     setVerificationUrl(null);
-    setStatus(null);
+    setDecision(null);
     setPollCount(0);
-    popupRef.current?.close();
+    setPopupClosed(false);
     popupRef.current = null;
   };
 
@@ -173,41 +234,39 @@ export default function DiditVerificationModal({ open, onClose, onVerified }: Pr
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — click to close only on intro/result, not while waiting */}
       <div
-        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm"
-        onClick={step === 'verifying' ? undefined : handleClose}
+        className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm transition-opacity"
+        onClick={step === 'waiting' ? undefined : handleClose}
         aria-hidden="true"
       />
 
-      {/* Modal card */}
+      {/* Modal */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
         <div
           className="relative w-full max-w-md bg-card border border-border/60 rounded-2xl shadow-2xl overflow-hidden pointer-events-auto"
           role="dialog"
           aria-modal="true"
-          aria-labelledby="didit-modal-title"
+          aria-labelledby="didit-title"
           onClick={(e) => e.stopPropagation()}
         >
-          {/* ── Header ── */}
-          <div className="flex items-center justify-between px-6 py-4 border-b border-border/60 bg-gradient-to-r from-primary/5 via-transparent to-transparent">
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-border/60 bg-gradient-to-r from-primary/5 to-transparent shrink-0">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center">
                 <ShieldCheck className="w-5 h-5 text-primary" />
               </div>
               <div>
-                <h2 id="didit-modal-title" className="font-semibold text-sm text-foreground">
-                  Identity Verification
-                </h2>
+                <h2 id="didit-title" className="font-semibold text-sm text-foreground">Identity Verification</h2>
                 <p className="text-xs text-muted-foreground">Powered by Didit KYC</p>
               </div>
             </div>
-            {/* Step dots */}
+            {/* Step indicator */}
             <div className="flex items-center gap-1.5 mr-8">
-              {['intro', 'verifying', 'result'].map((s, i) => (
-                <div key={s} className={`h-1.5 rounded-full transition-all duration-300 ${
+              {(['intro', 'waiting', 'result'] as VerificationStep[]).map((s, i) => (
+                <div key={s} className={`h-1.5 rounded-full transition-all duration-500 ${
                   s === step ? 'w-6 bg-primary'
-                  : (step === 'result' || (step !== 'intro' && i === 0)) ? 'w-1.5 bg-primary/40'
+                  : (step === 'result' && i < 2) || (step === 'waiting' && i === 0) ? 'w-1.5 bg-primary/50'
                   : 'w-1.5 bg-border'
                 }`} />
               ))}
@@ -215,16 +274,16 @@ export default function DiditVerificationModal({ open, onClose, onVerified }: Pr
             <button
               onClick={handleClose}
               className="absolute right-4 top-4 w-7 h-7 rounded-full flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-              aria-label="Close"
+              aria-label="Close verification modal"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* ── Body ── */}
+          {/* Body */}
           <div className="p-6">
 
-            {/* ─ Step: Intro ───────────────────────────────────────────── */}
+            {/* ─── INTRO ──────────────────────────────────────────────────── */}
             {step === 'intro' && (
               <div className="flex flex-col items-center text-center gap-5">
                 <div className="relative">
@@ -239,18 +298,18 @@ export default function DiditVerificationModal({ open, onClose, onVerified }: Pr
                 <div>
                   <h3 className="text-lg font-bold text-foreground mb-1.5">Verify Your Identity</h3>
                   <p className="text-sm text-muted-foreground leading-relaxed">
-                    We need to verify your identity using a government-issued ID and a quick face scan to process your claims securely.
+                    A government-issued ID and a quick face scan are required to process your claims securely. It only takes a minute.
                   </p>
                 </div>
 
-                <div className="w-full space-y-2.5">
+                <div className="w-full space-y-2">
                   {[
-                    { icon: FileText, label: 'National ID or Passport', desc: 'Front and back if applicable', color: 'text-primary bg-primary/10' },
-                    { icon: Camera, label: 'Face Verification', desc: 'A quick selfie to match your ID', color: 'text-success bg-success/10' },
-                    { icon: ShieldCheck, label: 'Instant Decision', desc: 'Usually approved in seconds', color: 'text-warning bg-warning/10' },
-                  ].map(({ icon: Icon, label, desc, color }) => (
+                    { icon: FileText, label: 'National ID or Passport', desc: 'Front and back if applicable', cls: 'text-primary bg-primary/10' },
+                    { icon: Camera,   label: 'Face Verification',        desc: 'A quick selfie to match your ID',  cls: 'text-success bg-success/10' },
+                    { icon: ShieldCheck, label: 'Instant Decision',      desc: 'Usually approved in seconds',       cls: 'text-warning bg-warning/10' },
+                  ].map(({ icon: Icon, label, desc, cls }) => (
                     <div key={label} className="flex items-center gap-3 p-3 rounded-xl bg-muted/30 border border-border/40">
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${color}`}>
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${cls}`}>
                         <Icon className="w-4 h-4" />
                       </div>
                       <div className="text-left">
@@ -271,85 +330,96 @@ export default function DiditVerificationModal({ open, onClose, onVerified }: Pr
                 <div className="w-full flex flex-col gap-2">
                   <Button
                     id="didit-start-btn"
-                    className="w-full bg-primary hover:bg-primary/90 h-11 font-semibold gap-2"
-                    onClick={handleStartVerification}
+                    className="w-full h-11 font-semibold gap-2 bg-primary hover:bg-primary/90"
+                    onClick={handleStart}
                     disabled={loading}
                   >
-                    {loading ? (
-                      <><Loader2 className="w-4 h-4 animate-spin" /> Setting up verification…</>
-                    ) : (
-                      <><ShieldCheck className="w-4 h-4" /> Start Verification <ArrowRight className="w-4 h-4" /></>
-                    )}
+                    {loading
+                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Setting up…</>
+                      : <><ShieldCheck className="w-4 h-4" /> Start Verification <ArrowRight className="w-4 h-4" /></>}
                   </Button>
                   <p className="text-[11px] text-muted-foreground text-center">
-                    A small verification window will open — complete it and return here
+                    A small window will open — complete it and return here automatically
                   </p>
                 </div>
               </div>
             )}
 
-            {/* ─ Step: Verifying (popup opened, polling) ────────────────── */}
-            {step === 'verifying' && (
+            {/* ─── WAITING ────────────────────────────────────────────────── */}
+            {step === 'waiting' && (
               <div className="flex flex-col items-center text-center gap-5 py-2">
-                {/* Animated pulse ring */}
-                <div className="relative flex items-center justify-center">
-                  <div className="absolute w-24 h-24 rounded-full bg-primary/10 animate-ping" style={{ animationDuration: '2.5s' }} />
-                  <div className="absolute w-20 h-20 rounded-full bg-primary/15 animate-ping" style={{ animationDuration: '2s', animationDelay: '0.5s' }} />
-                  <div className="relative w-16 h-16 rounded-full bg-primary/20 border-2 border-primary/30 flex items-center justify-center">
-                    <Loader2 className="w-7 h-7 text-primary animate-spin" />
+                {/* Animated rings */}
+                <div className="relative flex items-center justify-center w-28 h-28">
+                  <div className="absolute w-28 h-28 rounded-full border border-primary/10 animate-ping" style={{ animationDuration: '3s' }} />
+                  <div className="absolute w-20 h-20 rounded-full border border-primary/20 animate-ping" style={{ animationDuration: '2.2s', animationDelay: '0.4s' }} />
+                  <div className="absolute w-14 h-14 rounded-full bg-primary/10 border border-primary/30 flex items-center justify-center">
+                    <Loader2 className="w-6 h-6 text-primary animate-spin" />
                   </div>
                 </div>
 
                 <div>
-                  <h3 className="text-lg font-bold text-foreground mb-1.5">Verification In Progress</h3>
+                  <h3 className="text-lg font-bold text-foreground mb-1.5">
+                    {popupClosed ? 'Verification Window Closed' : 'Waiting for Verification…'}
+                  </h3>
                   <p className="text-sm text-muted-foreground leading-relaxed">
-                    Complete your ID and face scan in the verification window that just opened. This page will update automatically.
+                    {popupClosed
+                      ? `Complete your verification in the Didit window. If you closed it by mistake, reopen it below.`
+                      : `Complete your ID and face scan in the Didit window. This page will update automatically once done.`}
                   </p>
                 </div>
 
-                {/* Status indicator */}
-                <div className="w-full flex flex-col gap-2.5">
-                  <div className="flex items-center justify-between p-3 rounded-xl bg-muted/30 border border-border/40">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-                      <span className="text-xs text-muted-foreground">
-                        Monitoring status{pollCount > 0 ? ` (checked ${pollCount}×)` : '…'}
-                      </span>
-                    </div>
-                    <Loader2 className="w-3 h-3 text-muted-foreground animate-spin" />
+                {/* Live status */}
+                <div className="w-full rounded-xl bg-muted/30 border border-border/40 divide-y divide-border/30">
+                  <div className="flex items-center justify-between px-4 py-2.5">
+                    <span className="text-xs text-muted-foreground">Verification window</span>
+                    <span className={`text-xs font-medium flex items-center gap-1.5 ${popupClosed ? 'text-warning' : 'text-success'}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${popupClosed ? 'bg-warning' : 'bg-success animate-pulse'}`} />
+                      {popupClosed ? 'Closed' : 'Open'}
+                    </span>
                   </div>
+                  <div className="flex items-center justify-between px-4 py-2.5">
+                    <span className="text-xs text-muted-foreground">Status checks</span>
+                    <span className="text-xs font-medium text-foreground">{pollCount} completed</span>
+                  </div>
+                </div>
 
+                <div className="w-full flex flex-col gap-2">
                   <div className="flex gap-2">
                     <Button
                       id="didit-reopen-btn"
                       variant="outline"
-                      className="flex-1 gap-1.5 text-xs"
-                      onClick={reopenPopup}
+                      className="flex-1 gap-1.5 text-sm"
+                      onClick={handleReopenPopup}
                     >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      Reopen Window
+                      <ExternalLink className="w-3.5 h-3.5" /> Reopen Window
                     </Button>
                     <Button
-                      id="didit-cancel-btn"
-                      variant="ghost"
-                      className="flex-1 text-xs"
-                      onClick={handleClose}
+                      id="didit-check-now-btn"
+                      variant="outline"
+                      className="flex-1 gap-1.5 text-sm"
+                      onClick={handleCheckNow}
+                      disabled={loading}
                     >
-                      Cancel
+                      {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                      Check Now
                     </Button>
                   </div>
+                  <Button id="didit-cancel-waiting-btn" variant="ghost" className="w-full text-sm text-muted-foreground" onClick={handleClose}>
+                    Cancel
+                  </Button>
                 </div>
 
                 <p className="text-[11px] text-muted-foreground">
-                  Don't close this page — it will auto-update when complete
+                  Keep this page open — it auto-updates when verification is complete
                 </p>
               </div>
             )}
 
-            {/* ─ Step: Result ──────────────────────────────────────────── */}
+            {/* ─── RESULT ─────────────────────────────────────────────────── */}
             {step === 'result' && (
               <div className="flex flex-col items-center text-center gap-5">
-                {status === 'Approved' && (
+
+                {decision === 'Approved' && (
                   <>
                     <div className="relative">
                       <div className="w-20 h-20 rounded-full bg-success/15 border-2 border-success/30 flex items-center justify-center">
@@ -360,7 +430,7 @@ export default function DiditVerificationModal({ open, onClose, onVerified }: Pr
                     <div>
                       <h3 className="text-lg font-bold text-foreground mb-1.5">Identity Verified! 🎉</h3>
                       <p className="text-sm text-muted-foreground">
-                        Your identity has been successfully verified. You now have full access to all claim processing features.
+                        Your identity has been verified. You now have full access to claim processing — no additional ID uploads needed.
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2 justify-center">
@@ -371,31 +441,25 @@ export default function DiditVerificationModal({ open, onClose, onVerified }: Pr
                         <CheckCircle2 className="w-3 h-3" /> Face Match Passed
                       </span>
                     </div>
-                    <Button id="didit-done-btn" className="w-full bg-success hover:bg-success/90 h-11 font-semibold" onClick={handleClose}>
-                      Done — Continue to Dashboard
+                    <Button id="didit-done-btn" className="w-full h-11 font-semibold bg-success hover:bg-success/90" onClick={handleClose}>
+                      Continue to Dashboard
                     </Button>
                   </>
                 )}
 
-                {(status === 'Declined' || status === 'Resubmission_Required') && (
+                {(decision === 'Declined' || decision === 'Resubmission_Required') && (
                   <>
                     <div className="w-20 h-20 rounded-full bg-destructive/10 border-2 border-destructive/20 flex items-center justify-center">
                       <XCircle className="w-10 h-10 text-destructive" />
                     </div>
                     <div>
                       <h3 className="text-lg font-bold text-foreground mb-1.5">
-                        {status === 'Resubmission_Required' ? 'Documents Need Resubmission' : 'Verification Unsuccessful'}
+                        {decision === 'Resubmission_Required' ? 'Resubmission Required' : 'Verification Unsuccessful'}
                       </h3>
                       <p className="text-sm text-muted-foreground">
-                        {status === 'Resubmission_Required'
-                          ? `Some documents were unclear. Please try again with clear, well-lit photos.`
-                          : `We were unable to verify your identity. Please ensure you're using a valid government-issued ID.`}
-                      </p>
-                    </div>
-                    <div className="w-full flex items-start gap-2 p-3 rounded-xl bg-warning/10 border border-warning/20 text-left">
-                      <AlertCircle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
-                      <p className="text-xs text-foreground">
-                        Ensure your ID is fully visible, well-lit, not blurry. Check camera permissions are enabled.
+                        {decision === 'Resubmission_Required'
+                          ? `Some documents were unclear. Please retry with clear, well-lit photos.`
+                          : `We couldn't verify your identity. Please ensure you're using a valid government-issued ID and camera is allowed.`}
                       </p>
                     </div>
                     <div className="w-full flex gap-2">
@@ -407,7 +471,7 @@ export default function DiditVerificationModal({ open, onClose, onVerified }: Pr
                   </>
                 )}
 
-                {status === null && (
+                {decision === null && (
                   <>
                     <div className="w-20 h-20 rounded-full bg-warning/10 border-2 border-warning/20 flex items-center justify-center">
                       <Clock className="w-10 h-10 text-warning" />
@@ -415,20 +479,18 @@ export default function DiditVerificationModal({ open, onClose, onVerified }: Pr
                     <div>
                       <h3 className="text-lg font-bold text-foreground mb-1.5">Under Review</h3>
                       <p className="text-sm text-muted-foreground">
-                        Your documents have been submitted and are being reviewed. This usually takes up to 24 hours.
+                        Your documents have been submitted and are under review. This usually takes up to 24 hours — we'll update your status automatically.
                       </p>
                     </div>
                     <span className="flex items-center gap-1.5 text-xs text-warning bg-warning/10 border border-warning/20 px-3 py-1 rounded-full">
                       <Clock className="w-3 h-3" /> Review in progress
                     </span>
-                    <Button id="didit-close-review-btn" className="w-full h-11" onClick={handleClose}>
-                      Got it — I'll wait
-                    </Button>
+                    <Button id="didit-close-review-btn" className="w-full h-11" onClick={handleClose}>Got it</Button>
                   </>
                 )}
+
               </div>
             )}
-
           </div>
         </div>
       </div>

@@ -202,21 +202,21 @@ const CustomerDashboard = () => {
           </div>
         </div>
 
-        {/* Verification Banner — only shown when not verified */}
+        {/* Verification Banner — only shown when identity is NOT yet approved */}
         {kycStatus !== 'approved' && (
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-xl bg-gradient-to-r from-warning/10 to-warning/5 border border-warning/30">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-xl border border-warning/30 bg-gradient-to-r from-warning/10 to-warning/5">
             <div className="flex items-start gap-3">
               <div className="w-9 h-9 rounded-full bg-warning/15 flex items-center justify-center shrink-0">
                 <ShieldAlert className="w-5 h-5 text-warning" />
               </div>
               <div>
                 <p className="text-sm font-semibold text-foreground">
-                  {kycStatus === 'pending' ? 'Identity Verification Pending' : 'Identity Not Verified'}
+                  {kycStatus === 'pending' ? 'Identity Verification Under Review' : 'Identity Not Verified'}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {kycStatus === 'pending'
-                    ? `Your documents are under review. We'll notify you once approved.`
-                    : `Verify your identity to unlock full claim processing and faster approvals.`}
+                    ? `Your documents are being reviewed. No action needed — we'll update your status automatically.`
+                    : `Verify your identity to unlock faster claim processing. No additional ID uploads needed once verified.`}
                 </p>
               </div>
             </div>
@@ -224,10 +224,10 @@ const CustomerDashboard = () => {
               <Button
                 id="dashboard-verify-btn"
                 size="sm"
-                className="bg-warning hover:bg-warning/90 text-warning-foreground shrink-0 gap-1.5 text-xs font-semibold"
+                className="shrink-0 gap-1.5 text-xs font-semibold bg-warning hover:bg-warning/90 text-warning-foreground"
                 onClick={() => setVerifyOpen(true)}
               >
-                <ShieldCheck className="w-3.5 h-3.5" /> Verify Now
+                <ShieldCheck className="w-3.5 h-3.5" /> Verify Identity
               </Button>
             )}
           </div>
@@ -566,53 +566,88 @@ const CustomerDashboard = () => {
               Upload Claim Documents
             </DialogTitle>
             <DialogDescription>
-              Claim CLM-2024-0003 — Please upload all required documents to continue processing.
+              Upload the required supporting documents for your claim.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3 py-2">
-            {Object.keys(uploadFiles).map((docName) => (
-              <div key={docName} className="border border-border/60 rounded-lg p-3 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={`w-2 h-2 rounded-full shrink-0 ${uploadFiles[docName] ? 'bg-success' : 'bg-destructive'}`} />
-                  <span className="text-sm font-medium truncate">{docName}</span>
-                </div>
-                <label className="shrink-0 cursor-pointer">
-                  <input
-                    type="file"
-                    accept="image/*,.pdf"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) setUploadFiles((prev) => ({ ...prev, [docName]: f }));
-                    }}
-                  />
-                  <span className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
-                    uploadFiles[docName]
-                      ? 'bg-success/10 text-success border border-success/30 hover:bg-success/20'
-                      : 'bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20'
-                  }`}>
-                    {uploadFiles[docName] ? (
-                      <><CheckCircle className="w-3 h-3" /> {uploadFiles[docName]!.name.slice(0, 14)}...</>
-                    ) : (
-                      <><Upload className="w-3 h-3" /> Choose File</>
+          {/* Identity status row */}
+          <div className={`flex items-center gap-3 p-3 rounded-xl border ${
+            kycStatus === 'approved'
+              ? 'bg-success/5 border-success/20'
+              : 'bg-warning/5 border-warning/20'
+          }`}>
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+              kycStatus === 'approved' ? 'bg-success/15' : 'bg-warning/15'
+            }`}>
+              {kycStatus === 'approved'
+                ? <CheckCircle className="w-4 h-4 text-success" />
+                : <ShieldAlert className="w-4 h-4 text-warning" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground">
+                {kycStatus === 'approved' ? 'Identity Verified' : 'Identity Not Verified'}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {kycStatus === 'approved'
+                  ? 'No ID copy required — your identity is already confirmed.'
+                  : 'Verify your identity to skip the ID copy requirement.'}
+              </p>
+            </div>
+            {kycStatus !== 'approved' && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="shrink-0 text-xs gap-1 border-warning/30 text-warning hover:bg-warning/10"
+                onClick={() => { setUploadOpen(false); setVerifyOpen(true); }}
+              >
+                <ShieldCheck className="w-3 h-3" /> Verify
+              </Button>
+            )}
+          </div>
+
+          <div className="space-y-3">
+            {/* Claim-specific documents — always shown */}
+            {Object.entries(uploadFiles)
+              .filter(([name]) => name !== 'ID Copy' || kycStatus !== 'approved')
+              .map(([docName]) => (
+                <div key={docName} className="border border-border/60 rounded-lg p-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${uploadFiles[docName] ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                    <span className="text-sm font-medium truncate">{docName}</span>
+                    {docName === 'ID Copy' && (
+                      <span className="text-[10px] text-warning bg-warning/10 border border-warning/20 px-1.5 py-0.5 rounded-full shrink-0">Required</span>
                     )}
-                  </span>
-                </label>
-              </div>
-            ))}
+                  </div>
+                  <label className="shrink-0 cursor-pointer">
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) setUploadFiles((prev) => ({ ...prev, [docName]: f }));
+                      }}
+                    />
+                    <span className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
+                      uploadFiles[docName]
+                        ? 'bg-success/10 text-success border border-success/30 hover:bg-success/20'
+                        : 'bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20'
+                    }`}>
+                      {uploadFiles[docName] ? (
+                        <><CheckCircle className="w-3 h-3" /> {uploadFiles[docName]!.name.slice(0, 14)}…</>
+                      ) : (
+                        <><Upload className="w-3 h-3" /> Choose File</>
+                      )}
+                    </span>
+                  </label>
+                </div>
+              ))}
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="ghost" onClick={() => setUploadOpen(false)} disabled={uploading}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-primary hover:bg-primary/90"
-              onClick={handleUploadNow}
-              disabled={uploading}
-            >
-              {uploading ? 'Uploading...' : 'Submit Documents'}
+            <Button variant="ghost" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
+            <Button className="bg-primary hover:bg-primary/90" onClick={handleUploadNow} disabled={uploading}>
+              {uploading ? 'Uploading…' : 'Submit Documents'}
             </Button>
           </DialogFooter>
         </DialogContent>
