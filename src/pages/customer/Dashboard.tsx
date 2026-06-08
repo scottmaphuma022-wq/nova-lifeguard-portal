@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { 
   FileText, CreditCard, Clock, Shield, AlertCircle, CheckCircle, 
-  XCircle, FileUp, ChevronRight, Upload
+  XCircle, FileUp, ChevronRight, Upload, ShieldCheck, ShieldAlert
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -18,6 +18,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import DiditVerificationModal from '@/components/DiditVerificationModal';
 
 /* ------------------ helpers ------------------ */
 const statusColors: Record<string, string> = {
@@ -39,6 +40,8 @@ const CustomerDashboard = () => {
   const [username, setUsername] = useState('Customer');
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  const [kycStatus, setKycStatus] = useState<string | null>(null);
   const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({
     'Death Certificate': null,
     'ID Copy': null,
@@ -64,11 +67,14 @@ const CustomerDashboard = () => {
 
       const { data: profile } = await supabase
         .from('userprofile')
-        .select('id, username')
+        .select('id, username, kyc_status')
         .eq('id', user.id)
         .single();
 
-      if (profile) setUsername(profile.username);
+      if (profile) {
+        setUsername(profile.username);
+        setKycStatus(profile.kyc_status ?? null);
+      }
 
       const { data: claimsData } = await supabase
         .from('claims')
@@ -195,6 +201,37 @@ const CustomerDashboard = () => {
              {/* Duplicated notifications and profile removed to match DashboardLayout */}
           </div>
         </div>
+
+        {/* Verification Banner — only shown when not verified */}
+        {kycStatus !== 'approved' && (
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-4 rounded-xl bg-gradient-to-r from-warning/10 to-warning/5 border border-warning/30">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-full bg-warning/15 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5 text-warning" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">
+                  {kycStatus === 'pending' ? 'Identity Verification Pending' : 'Identity Not Verified'}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {kycStatus === 'pending'
+                    ? `Your documents are under review. We'll notify you once approved.`
+                    : `Verify your identity to unlock full claim processing and faster approvals.`}
+                </p>
+              </div>
+            </div>
+            {kycStatus !== 'pending' && (
+              <Button
+                id="dashboard-verify-btn"
+                size="sm"
+                className="bg-warning hover:bg-warning/90 text-warning-foreground shrink-0 gap-1.5 text-xs font-semibold"
+                onClick={() => setVerifyOpen(true)}
+              >
+                <ShieldCheck className="w-3.5 h-3.5" /> Verify Now
+              </Button>
+            )}
+          </div>
+        )}
 
         {/* Top Stats Cards */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -580,6 +617,16 @@ const CustomerDashboard = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Didit Identity Verification Modal */}
+      <DiditVerificationModal
+        open={verifyOpen}
+        onClose={() => setVerifyOpen(false)}
+        onVerified={() => {
+          setKycStatus('approved');
+          toast({ title: 'Identity verified successfully ✓', description: 'You now have full access to all features.' });
+        }}
+      />
     </DashboardLayout>
   );
 };

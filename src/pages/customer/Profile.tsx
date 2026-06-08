@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import {
   User, Mail, Phone, CreditCard, Shield,
-  Edit3, Save, X, Camera, CheckCircle, Key, Eye, EyeOff
+  Edit3, Save, X, Camera, CheckCircle, Key, Eye, EyeOff,
+  ShieldAlert, ShieldCheck, ShieldX, Clock, ArrowRight
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,46 @@ import { Separator } from '@/components/ui/separator';
 import { useToast } from '@/hooks/use-toast';
 import DashboardLayout from '@/components/DashboardLayout';
 import { supabase } from '@/lib/supabaseClient';
+import DiditVerificationModal from '@/components/DiditVerificationModal';
+
+/* ── KYC status helpers ─────────────────────────────────────────────────────── */
+type KycStatus = 'approved' | 'pending' | 'declined' | 'resubmission_required' | null;
+
+const kycConfig: Record<
+  NonNullable<KycStatus> | 'unverified',
+  { label: string; icon: React.ElementType; badge: string; desc: string }
+> = {
+  approved: {
+    label: 'Verified',
+    icon: ShieldCheck,
+    badge: 'bg-success/10 text-success border-success/20',
+    desc: 'Your identity has been successfully verified.',
+  },
+  pending: {
+    label: 'Pending Review',
+    icon: Clock,
+    badge: 'bg-warning/10 text-warning border-warning/20',
+    desc: 'Your documents are under review. This may take up to 24 hours.',
+  },
+  declined: {
+    label: 'Verification Failed',
+    icon: ShieldX,
+    badge: 'bg-destructive/10 text-destructive border-destructive/20',
+    desc: 'Verification was unsuccessful. Please try again with a valid ID.',
+  },
+  resubmission_required: {
+    label: 'Resubmission Required',
+    icon: ShieldAlert,
+    badge: 'bg-warning/10 text-warning border-warning/20',
+    desc: 'Some documents were unclear. Please resubmit with better quality images.',
+  },
+  unverified: {
+    label: 'Not Verified',
+    icon: ShieldAlert,
+    badge: 'bg-muted text-muted-foreground border-border',
+    desc: 'Your identity has not been verified yet. Verify now to unlock full access.',
+  },
+};
 
 const CustomerProfile = () => {
   const { toast } = useToast();
@@ -20,6 +61,8 @@ const CustomerProfile = () => {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  const [kycStatus, setKycStatus] = useState<KycStatus>(null);
 
   const [profile, setProfile] = useState({
     username: '',
@@ -62,6 +105,7 @@ const CustomerProfile = () => {
         };
         setProfile(p);
         setEditForm(p);
+        setKycStatus(data.kyc_status as KycStatus ?? null);
       }
     };
 
@@ -149,9 +193,15 @@ const CustomerProfile = () => {
                 <h2 className="text-xl font-bold">{profile.full_name || profile.username}</h2>
                 <p className="text-sm text-muted-foreground">{profile.email}</p>
                 <div className="flex flex-wrap items-center gap-2 mt-2">
-                  <Badge variant="secondary" className="bg-success/10 text-success border-success/20 text-xs">
-                    <CheckCircle className="w-3 h-3 mr-1" /> Verified
-                  </Badge>
+                  {(() => {
+                    const cfg = kycConfig[kycStatus ?? 'unverified'];
+                    const Icon = cfg.icon;
+                    return (
+                      <Badge variant="outline" className={`text-xs ${cfg.badge}`}>
+                        <Icon className="w-3 h-3 mr-1" /> {cfg.label}
+                      </Badge>
+                    );
+                  })()}
                   <Badge variant="outline" className="text-xs">
                     Member since {profile.created_at}
                   </Badge>
@@ -361,7 +411,81 @@ const CustomerProfile = () => {
             )}
           </CardContent>
         </Card>
+        {/* Identity Verification */}
+        <Card className="shadow-sm border-border/50 overflow-hidden">
+          <CardHeader className="pb-4">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Shield className="w-4 h-4 text-primary" />
+              Identity Verification
+            </CardTitle>
+            <CardDescription>Verify your identity to unlock full access to claims processing</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {(() => {
+              const cfg = kycConfig[kycStatus ?? 'unverified'];
+              const Icon = cfg.icon;
+              const isApproved = kycStatus === 'approved';
+              const isPending = kycStatus === 'pending';
+
+              return (
+                <div className={`flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 rounded-xl border ${
+                  isApproved
+                    ? 'bg-success/5 border-success/20'
+                    : isPending
+                    ? 'bg-warning/5 border-warning/20'
+                    : kycStatus === 'declined' || kycStatus === 'resubmission_required'
+                    ? 'bg-destructive/5 border-destructive/20'
+                    : 'bg-muted/30 border-border/50'
+                }`}>
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+                      isApproved ? 'bg-success/15'
+                      : isPending ? 'bg-warning/15'
+                      : kycStatus === 'declined' ? 'bg-destructive/15'
+                      : 'bg-muted'
+                    }`}>
+                      <Icon className={`w-5 h-5 ${
+                        isApproved ? 'text-success'
+                        : isPending ? 'text-warning'
+                        : kycStatus === 'declined' ? 'text-destructive'
+                        : 'text-muted-foreground'
+                      }`} />
+                    </div>
+                    <div>
+                      <p className="font-semibold text-sm text-foreground">{cfg.label}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5 max-w-xs">{cfg.desc}</p>
+                    </div>
+                  </div>
+                  {!isApproved && !isPending && (
+                    <Button
+                      id="verify-identity-btn"
+                      size="sm"
+                      className="bg-primary hover:bg-primary/90 shrink-0 gap-1.5"
+                      onClick={() => setVerifyOpen(true)}
+                    >
+                      {kycStatus === 'declined' || kycStatus === 'resubmission_required' ? (
+                        <><ShieldAlert className="w-3.5 h-3.5" /> Retry Verification</>
+                      ) : (
+                        <><ShieldCheck className="w-3.5 h-3.5" /> Verify Identity <ArrowRight className="w-3 h-3" /></>
+                      )}
+                    </Button>
+                  )}
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
       </div>
+
+      {/* Didit Verification Modal */}
+      <DiditVerificationModal
+        open={verifyOpen}
+        onClose={() => setVerifyOpen(false)}
+        onVerified={() => {
+          setKycStatus('approved');
+          toast({ title: 'Identity verified successfully ✓', description: 'You now have full access to all features.' });
+        }}
+      />
     </DashboardLayout>
   );
 };
