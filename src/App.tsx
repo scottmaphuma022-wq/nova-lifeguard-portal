@@ -23,6 +23,8 @@ const ManagerSettings    = lazy(() => import("./pages/admin/ManagerSettings"));
 const OfficerDashboard   = lazy(() => import("./pages/admin/OfficerDashboard"));
 const OfficerClaims      = lazy(() => import("./pages/admin/OfficerClaims"));
 const OfficerPayments    = lazy(() => import("./pages/admin/OfficerPayments"));
+const OfficerSettings    = lazy(() => import("./pages/admin/OfficerSettings"));
+const AdminProfile       = lazy(() => import("./pages/admin/AdminProfile"));
 
 /* ── Minimal route-transition skeleton ───────────────────────────────────── */
 const PageSkeleton = () => (
@@ -73,6 +75,9 @@ const App = () => (
               <Route path="/novaportal/officer"            element={<OfficerDashboard />} />
               <Route path="/novaportal/officer/claims"     element={<OfficerClaims />} />
               <Route path="/novaportal/officer/payments"   element={<OfficerPayments />} />
+              <Route path="/novaportal/officer/settings"   element={<OfficerSettings />} />
+              <Route path="/novaportal/officer/profile"    element={<AdminProfile role="officer" />} />
+              <Route path="/novaportal/manager/profile"    element={<AdminProfile role="manager" />} />
 
               {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
               <Route path="*" element={<NotFound />} />
