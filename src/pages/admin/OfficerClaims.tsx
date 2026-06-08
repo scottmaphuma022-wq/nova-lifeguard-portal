@@ -231,46 +231,42 @@ const OfficerClaims = () => {
   };
 
   const handleAIVerify = async (claim: Claim) => {
-    if (claim.documents.length === 0) {
-      return toast({
-        title: 'AI Verification Failed',
-        description: 'No documents uploaded to verify.',
-        variant: 'destructive',
-      });
-    }
-
     setVerifyingId(claim.id);
     toast({
-      title: 'AI Verification Started 🧠',
-      description: 'Running OCR on uploaded files to verify credentials...',
+      title: 'Checking Identity Verification 🔍',
+      description: 'Looking up customer KYC status via Didit…',
     });
 
     try {
-      const urls = claim.documents.map(d => getPublicUrl(d.path));
-      
       const res = await fetch('/api/verify-document', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageUrls: urls }),
+        body: JSON.stringify({
+          claimId: claim.dbId,
+          imageUrls: claim.documents.map(d => getPublicUrl(d.path)),
+        }),
       });
 
       const result = await res.json();
-      
+
       if (res.ok && result.success) {
+        // KYC approved — auto-approve the claim
         await supabase.from('claims')
           .update({ claim_status: 'approved' })
           .eq('id', claim.dbId);
 
-        setClaims(prev => prev.map(c => c.id === claim.id ? { ...c, status: 'Verified' as const } : c));
-        
+        setClaims(prev => prev.map(c =>
+          c.id === claim.id ? { ...c, status: 'Verified' as const } : c
+        ));
+
         toast({
-          title: 'Verification Successful ✓',
-          description: `Documents match for ${result.debug?.names?.[0] || claim.customer}! Identity is verified.`,
+          title: 'Identity Verified ✓',
+          description: `Customer's Didit KYC is approved. Claim ${claim.id} has been verified.`,
         });
       } else {
         toast({
-          title: 'Verification Discrepancy ⚠️',
-          description: result.message || 'Details mismatch. Please review manually.',
+          title: result.kycStatus === 'pending' ? 'Verification Pending ⏳' : 'Identity Not Verified ⚠️',
+          description: result.message || 'Please review documents manually.',
           variant: 'destructive',
         });
       }
