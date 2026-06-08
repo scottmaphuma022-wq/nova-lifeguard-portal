@@ -38,15 +38,14 @@ const CustomerDashboard = () => {
   const { toast } = useToast();
 
   const [username, setUsername] = useState('Customer');
-  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState<{ claimId: string; claimType: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [verifyOpen, setVerifyOpen] = useState(false);
   const [kycStatus, setKycStatus] = useState<string | null>(null);
-  const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({
-    'Death Certificate': null,
-    'ID Copy': null,
-    'Medical Report': null,
-  });
+  // Single file for the claim-specific document
+  const [claimFile, setClaimFile] = useState<File | null>(null);
+  // Only shown when not verified — an ID copy
+  const [idFile, setIdFile] = useState<File | null>(null);
 
   const [stats, setStats] = useState({
     activePolicies: 0,
@@ -153,10 +152,23 @@ const CustomerDashboard = () => {
     loadDashboard();
   }, []);
 
+  /* Map claim reason → the specific document they need to upload */
+  const getClaimDoc = (claimType: string): string => {
+    const t = (claimType ?? '').toLowerCase();
+    if (t.includes('death'))       return 'Death Certificate';
+    if (t.includes('disab'))       return 'Disability Certificate';
+    if (t.includes('medical') || t.includes('hospital')) return 'Medical Report';
+    if (t.includes('accident'))    return 'Accident Report';
+    if (t.includes('funeral'))     return 'Funeral Invoice';
+    if (t.includes('repatri'))     return 'Repatriation Documents';
+    return 'Supporting Document';
+  };
+
   const handleUploadNow = async () => {
-    const filledDocs = Object.entries(uploadFiles).filter(([, f]) => f !== null);
-    if (filledDocs.length === 0) {
-      return toast({ title: 'Please upload at least one document', variant: 'destructive' });
+    if (!uploadOpen) return;
+    const isVerified = kycStatus === 'approved';
+    if (!claimFile && (isVerified || !idFile)) {
+      return toast({ title: 'Please upload the required document', variant: 'destructive' });
     }
 
     setUploading(true);
@@ -164,21 +176,24 @@ const CustomerDashboard = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      const timestamp = Date.now();
-      for (const [docName, file] of filledDocs) {
-        if (!file) continue;
+      const ts = Date.now();
+      const uploads: [string, File][] = [];
+      if (claimFile) uploads.push([getClaimDoc(uploadOpen.claimType), claimFile]);
+      if (!isVerified && idFile) uploads.push(['ID Copy', idFile]);
+
+      for (const [docName, file] of uploads) {
         const safeName = docName.replace(/\s+/g, '_');
-        const path = `${user.id}/pending-docs/${timestamp}-${safeName}-${file.name}`;
+        const path = `${user.id}/${uploadOpen.claimId}/${ts}-${safeName}-${file.name}`;
         const { error } = await supabase.storage
           .from('claim-documents')
           .upload(path, file, { upsert: true });
         if (error) throw new Error(`Upload failed for ${docName}: ${error.message}`);
       }
 
-      toast({ title: 'Documents uploaded successfully ✓', description: 'Our team will review your documents shortly.' });
-      setUploadOpen(false);
-      setUploadFiles({ 'Death Certificate': null, 'ID Copy': null, 'Medical Report': null });
-
+      toast({ title: 'Documents submitted ✓', description: 'Our team will review your documents shortly.' });
+      setUploadOpen(null);
+      setClaimFile(null);
+      setIdFile(null);
     } catch (err: any) {
       toast({ title: 'Upload failed', description: err.message, variant: 'destructive' });
     } finally {
@@ -425,7 +440,18 @@ const CustomerDashboard = () => {
                                           </Badge>
                                       </td>
                                       <td className="px-4 py-3 text-right">
-                                          <Button variant="link" size="sm" className="text-primary h-auto p-0" onClick={() => navigate('/claims')}>View Details</Button>
+                                          <Button
+                                            variant="link"
+                                            size="sm"
+                                            className="text-primary h-auto p-0"
+                                            onClick={() => {
+                                              setClaimFile(null);
+                                              setIdFile(null);
+                                              setUploadOpen({ claimId: claim.id, claimType: claim.type });
+                                            }}
+                                          >
+                                            Upload Docs
+                                          </Button>
                                       </td>
                                   </tr>
                               ))}
@@ -557,24 +583,24 @@ const CustomerDashboard = () => {
           </div>
         </div>
       </div>
-      {/* Document Upload Dialog */}
-      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+      {/* Document Upload Dialog — claim-aware, verification-aware */}
+      <Dialog open={!!uploadOpen} onOpenChange={(o) => { if (!o) { setUploadOpen(null); setClaimFile(null); setIdFile(null); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileUp className="w-5 h-5 text-warning" />
-              Upload Claim Documents
+              Upload Claim Document
             </DialogTitle>
             <DialogDescription>
-              Upload the required supporting documents for your claim.
+              {uploadOpen
+                ? `Claim ${uploadOpen.claimId} — upload your ${getClaimDoc(uploadOpen.claimType)}`
+                : 'Upload the required supporting document.'}
             </DialogDescription>
           </DialogHeader>
 
-          {/* Identity status row */}
+          {/* Identity verification status */}
           <div className={`flex items-center gap-3 p-3 rounded-xl border ${
-            kycStatus === 'approved'
-              ? 'bg-success/5 border-success/20'
-              : 'bg-warning/5 border-warning/20'
+            kycStatus === 'approved' ? 'bg-success/5 border-success/20' : 'bg-warning/5 border-warning/20'
           }`}>
             <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
               kycStatus === 'approved' ? 'bg-success/15' : 'bg-warning/15'
@@ -584,21 +610,20 @@ const CustomerDashboard = () => {
                 : <ShieldAlert className="w-4 h-4 text-warning" />}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-foreground">
-                {kycStatus === 'approved' ? 'Identity Verified' : 'Identity Not Verified'}
+              <p className="text-sm font-semibold text-foreground">
+                {kycStatus === 'approved' ? 'Identity Verified ✓' : 'Identity Not Verified'}
               </p>
               <p className="text-xs text-muted-foreground">
                 {kycStatus === 'approved'
-                  ? 'No ID copy required — your identity is already confirmed.'
-                  : 'Verify your identity to skip the ID copy requirement.'}
+                  ? 'No ID copy needed — only upload the claim document below.'
+                  : 'Verify your identity once to skip ID uploads on all future claims.'}
               </p>
             </div>
             {kycStatus !== 'approved' && (
               <Button
-                size="sm"
-                variant="outline"
-                className="shrink-0 text-xs gap-1 border-warning/30 text-warning hover:bg-warning/10"
-                onClick={() => { setUploadOpen(false); setVerifyOpen(true); }}
+                size="sm" variant="outline"
+                className="shrink-0 text-xs gap-1 border-warning/40 text-warning hover:bg-warning/10"
+                onClick={() => { setUploadOpen(null); setVerifyOpen(true); }}
               >
                 <ShieldCheck className="w-3 h-3" /> Verify
               </Button>
@@ -606,48 +631,66 @@ const CustomerDashboard = () => {
           </div>
 
           <div className="space-y-3">
-            {/* Claim-specific documents — always shown */}
-            {Object.entries(uploadFiles)
-              .filter(([name]) => name !== 'ID Copy' || kycStatus !== 'approved')
-              .map(([docName]) => (
-                <div key={docName} className="border border-border/60 rounded-lg p-3 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${uploadFiles[docName] ? 'bg-success' : 'bg-muted-foreground/40'}`} />
-                    <span className="text-sm font-medium truncate">{docName}</span>
-                    {docName === 'ID Copy' && (
-                      <span className="text-[10px] text-warning bg-warning/10 border border-warning/20 px-1.5 py-0.5 rounded-full shrink-0">Required</span>
-                    )}
+            {/* Claim-specific document — always shown, type-aware */}
+            {uploadOpen && (() => {
+              const docName = getClaimDoc(uploadOpen.claimType);
+              return (
+                <div className="border border-border/60 rounded-xl p-3.5 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${claimFile ? 'bg-success' : 'bg-muted-foreground/40'}`} />
+                    <div>
+                      <p className="text-sm font-medium text-foreground">{docName}</p>
+                      <p className="text-xs text-muted-foreground">Required — PDF or image</p>
+                    </div>
                   </div>
                   <label className="shrink-0 cursor-pointer">
-                    <input
-                      type="file"
-                      accept="image/*,.pdf"
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) setUploadFiles((prev) => ({ ...prev, [docName]: f }));
-                      }}
-                    />
-                    <span className={`inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-md font-medium transition-colors ${
-                      uploadFiles[docName]
-                        ? 'bg-success/10 text-success border border-success/30 hover:bg-success/20'
-                        : 'bg-primary/10 text-primary border border-primary/30 hover:bg-primary/20'
+                    <input type="file" accept="image/*,.pdf" className="hidden"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) setClaimFile(f); }} />
+                    <span className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-colors border ${
+                      claimFile
+                        ? 'bg-success/10 text-success border-success/30 hover:bg-success/20'
+                        : 'bg-primary/10 text-primary border-primary/30 hover:bg-primary/20'
                     }`}>
-                      {uploadFiles[docName] ? (
-                        <><CheckCircle className="w-3 h-3" /> {uploadFiles[docName]!.name.slice(0, 14)}…</>
-                      ) : (
-                        <><Upload className="w-3 h-3" /> Choose File</>
-                      )}
+                      {claimFile
+                        ? <><CheckCircle className="w-3 h-3" /> {claimFile.name.slice(0, 18)}…</>
+                        : <><Upload className="w-3 h-3" /> Choose File</>}
                     </span>
                   </label>
                 </div>
-              ))}
+              );
+            })()}
+
+            {/* ID Copy — only when NOT verified */}
+            {kycStatus !== 'approved' && (
+              <div className="border border-warning/30 rounded-xl p-3.5 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${idFile ? 'bg-success' : 'bg-warning'}`} />
+                  <div>
+                    <p className="text-sm font-medium text-foreground">ID Copy</p>
+                    <p className="text-xs text-muted-foreground">Required until you verify your identity</p>
+                  </div>
+                </div>
+                <label className="shrink-0 cursor-pointer">
+                  <input type="file" accept="image/*,.pdf" className="hidden"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) setIdFile(f); }} />
+                  <span className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-colors border ${
+                    idFile
+                      ? 'bg-success/10 text-success border-success/30 hover:bg-success/20'
+                      : 'bg-warning/10 text-warning border-warning/30 hover:bg-warning/20'
+                  }`}>
+                    {idFile
+                      ? <><CheckCircle className="w-3 h-3" /> {idFile.name.slice(0, 18)}…</>
+                      : <><Upload className="w-3 h-3" /> Choose File</>}
+                  </span>
+                </label>
+              </div>
+            )}
           </div>
 
           <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="ghost" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
+            <Button variant="ghost" onClick={() => { setUploadOpen(null); setClaimFile(null); setIdFile(null); }} disabled={uploading}>Cancel</Button>
             <Button className="bg-primary hover:bg-primary/90" onClick={handleUploadNow} disabled={uploading}>
-              {uploading ? 'Uploading…' : 'Submit Documents'}
+              {uploading ? 'Uploading…' : 'Submit Document'}
             </Button>
           </DialogFooter>
         </DialogContent>
