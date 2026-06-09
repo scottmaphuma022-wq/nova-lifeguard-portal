@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { 
-  FileText, CreditCard, Clock, Shield, AlertCircle, CheckCircle, 
+  FileText, CreditCard, Clock, Shield, AlertCircle, CheckCircle, Info,
   XCircle, FileUp, ChevronRight, Upload, ShieldCheck, ShieldAlert
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -59,10 +59,46 @@ const CustomerDashboard = () => {
   const [activePolicy, setActivePolicy] = useState<any>(null);
   const [recentPayments, setRecentPayments] = useState<any[]>([]);
 
+  /* ── Notifications (live from Supabase) ── */
+  type NotifType = 'info' | 'success' | 'warning' | 'error';
+  interface Notification { id: string; title: string; body: string; type: NotifType; read: boolean; created_at: string; }
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const notifStyle: Record<NotifType, { icon: React.ElementType; color: string; bg: string }> = {
+    info:    { icon: Info,         color: 'text-primary',     bg: 'bg-primary/10'     },
+    success: { icon: CheckCircle,  color: 'text-success',     bg: 'bg-success/10'     },
+    warning: { icon: AlertCircle,  color: 'text-warning',     bg: 'bg-warning/10'     },
+    error:   { icon: AlertCircle,  color: 'text-destructive', bg: 'bg-destructive/10' },
+  };
+
+  const timeAgo = (iso: string) => {
+    const diff = Date.now() - new Date(iso).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1)   return 'Just now';
+    if (m < 60)  return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24)  return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    return d < 7 ? `${d}d ago` : new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+  };
+
+  const loadNotifications = useCallback(async (userId: string) => {
+    const { data } = await supabase
+      .from('notifications')
+      .select('id, title, body, type, read, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if (data) setNotifications(data as Notification[]);
+  }, []);
+
   useEffect(() => {
     const loadDashboard = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      // Load notifications in parallel
+      loadNotifications(user.id);
 
       const { data: profile } = await supabase
         .from('userprofile')
@@ -150,7 +186,24 @@ const CustomerDashboard = () => {
     };
 
     loadDashboard();
-  }, []);
+  }, [loadNotifications]);
+
+  /* ── Realtime: update notifications live when claims change ── */
+  useEffect(() => {
+    let userId: string;
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) return;
+      userId = user.id;
+      const channel = supabase
+        .channel('dashboard-notifications')
+        .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+          () => loadNotifications(user.id)
+        )
+        .subscribe();
+      return () => { supabase.removeChannel(channel); };
+    });
+  }, [loadNotifications]);
 
   /* Map claim reason → the specific document they need to upload */
   const getClaimDoc = (claimType: string): string => {
@@ -537,42 +590,26 @@ const CustomerDashboard = () => {
             <Card className="shadow-sm border-border/50">
                 <CardHeader className="flex flex-row items-center justify-between pb-3">
                     <CardTitle className="text-base">Notifications</CardTitle>
-                    <Link to="/claims" className="text-xs text-primary hover:underline">View all</Link>
+                    <Link to="/claims" className="text-xs text-primary hover:underline">View claims</Link>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {recentClaims.length > 0 ? (
-                    recentClaims.map((claim, index) => (
-                      <div key={index} className="flex items-start gap-3">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${
-                          claim.status === 'approved' || claim.status === 'paid'
-                            ? 'bg-success/10'
-                            : claim.status === 'rejected'
-                            ? 'bg-destructive/10'
-                            : 'bg-warning/10'
-                        }`}>
-                          {claim.status === 'approved' || claim.status === 'paid' ? (
-                            <CheckCircle className="w-4 h-4 text-success" />
-                          ) : claim.status === 'rejected' ? (
-                            <AlertCircle className="w-4 h-4 text-destructive" />
-                          ) : (
-                            <AlertCircle className="w-4 h-4 text-warning" />
-                          )}
+                  {notifications.length > 0 ? (
+                    notifications.map((notif) => {
+                      const style = notifStyle[notif.type] ?? notifStyle.info;
+                      const Icon = style.icon;
+                      return (
+                        <div key={notif.id} className={`flex items-start gap-3 ${notif.read ? 'opacity-60' : ''}`}>
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${style.bg}`}>
+                            <Icon className={`w-4 h-4 ${style.color}`} />
+                          </div>
+                          <div>
+                            <p className="text-sm font-medium">{notif.title}</p>
+                            <p className="text-xs text-muted-foreground mt-0.5">{notif.body}</p>
+                            <p className="text-xs text-muted-foreground/60 mt-1">{timeAgo(notif.created_at)}</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm">
-                            Claim <strong>{claim.id}</strong>{' '}
-                            {claim.status === 'pending'
-                              ? 'is awaiting review.'
-                              : claim.status === 'approved'
-                              ? 'has been approved.'
-                              : claim.status === 'paid'
-                              ? 'payment has been disbursed.'
-                              : 'was rejected.'}
-                          </p>
-                          <p className="text-xs text-muted-foreground mt-1">{claim.date}</p>
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <p className="text-sm text-muted-foreground text-center py-4">No notifications yet.</p>
                   )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
@@ -15,6 +15,7 @@ import {
   AlertCircle,
   CheckCircle,
   X,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,49 +42,36 @@ const navItems = [
   { name: "Payments", href: "/payments", icon: CreditCard },
 ];
 
-/* ─── Mock notifications ─── */
-const INITIAL_NOTIFICATIONS = [
-  {
-    id: 1,
-    icon: AlertCircle,
-    color: "text-warning",
-    bg: "bg-warning/10",
-    title: "Action Required",
-    body: "Claim CLM-2024-0003 requires additional documents.",
-    time: "2 hours ago",
-    read: false,
-  },
-  {
-    id: 2,
-    icon: CheckCircle,
-    color: "text-success",
-    bg: "bg-success/10",
-    title: "Payment Successful",
-    body: "Payment of KES 1,500 was received. Thank you!",
-    time: "1 day ago",
-    read: false,
-  },
-  {
-    id: 3,
-    icon: Shield,
-    color: "text-primary",
-    bg: "bg-primary/10",
-    title: "Policy Active",
-    body: "Your policy POL-2024-001256 is now active.",
-    time: "3 days ago",
-    read: true,
-  },
-  {
-    id: 4,
-    icon: CheckCircle,
-    color: "text-success",
-    bg: "bg-success/10",
-    title: "Claim Approved",
-    body: "Claim CLM-2024-0002 has been approved.",
-    time: "5 days ago",
-    read: true,
-  },
-];
+/* ─── Notification type helpers ─── */
+type NotifType = 'info' | 'success' | 'warning' | 'error';
+
+interface Notification {
+  id: string;
+  title: string;
+  body: string;
+  type: NotifType;
+  read: boolean;
+  created_at: string;
+}
+
+const notifStyle: Record<NotifType, { icon: React.ElementType; color: string; bg: string }> = {
+  info:    { icon: Info,         color: 'text-primary',     bg: 'bg-primary/10'     },
+  success: { icon: CheckCircle,  color: 'text-success',     bg: 'bg-success/10'     },
+  warning: { icon: AlertCircle,  color: 'text-warning',     bg: 'bg-warning/10'     },
+  error:   { icon: AlertCircle,  color: 'text-destructive', bg: 'bg-destructive/10' },
+};
+
+const timeAgo = (iso: string) => {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60000);
+  if (m < 1)   return 'Just now';
+  if (m < 60)  return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24)  return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7)   return `${d}d ago`;
+  return new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+};
 
 const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const location = useLocation();
@@ -93,26 +81,47 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
   const [username, setUsername] = useState("User");
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifications, setNotifications] = useState(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const notifRef = useRef<HTMLDivElement>(null);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  const fetchProfile = async () => {
-    if (!user?.id) return;
-    const { data } = await supabase
-      .from("userprofile")
-      .select("username")
-      .eq("id", user.id)
-      .single();
-    if (data?.username) setUsername(data.username);
-  };
-
+  /* ── Load profile ──────────────────────────────────────────────────── */
   useEffect(() => {
-    fetchProfile();
+    if (!user?.id) return;
+    supabase.from("userprofile").select("username").eq("id", user.id).single()
+      .then(({ data }) => { if (data?.username) setUsername(data.username); });
   }, [user]);
 
-  // Close notification panel on outside click
+  /* ── Load notifications from Supabase ──────────────────────────────── */
+  const loadNotifications = useCallback(async () => {
+    if (!user?.id) return;
+    const { data } = await supabase
+      .from('notifications')
+      .select('id, title, body, type, read, created_at')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (data) setNotifications(data as Notification[]);
+  }, [user?.id]);
+
+  useEffect(() => { loadNotifications(); }, [loadNotifications]);
+
+  /* ── Realtime — new notifications arrive instantly ─────────────────── */
+  useEffect(() => {
+    if (!user?.id) return;
+    const channel = supabase
+      .channel('notifications-realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        () => { loadNotifications(); }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [user?.id, loadNotifications]);
+
+  /* ── Close panel on outside click ──────────────────────────────────── */
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
@@ -129,11 +138,25 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
     setTimeout(() => navigate("/"), 2000);
   };
 
-  const markAllRead = () =>
-    setNotifications((n) => n.map((item) => ({ ...item, read: true })));
+  /* ── Mark all read ─────────────────────────────────────────────────── */
+  const markAllRead = async () => {
+    if (!user?.id) return;
+    const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+    if (unreadIds.length === 0) return;
+    await supabase.from('notifications').update({ read: true }).in('id', unreadIds);
+    setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+  };
 
-  const dismissNotif = (id: number) =>
-    setNotifications((n) => n.filter((item) => item.id !== id));
+  /* ── Dismiss (delete) a single notification ─────────────────────────── */
+  const dismissNotif = async (id: string) => {
+    await supabase.from('notifications').delete().eq('id', id);
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  /* ── Mark read when panel is opened ────────────────────────────────── */
+  const handleOpenNotifPanel = () => {
+    setNotifOpen(o => !o);
+  };
 
   const isActive = (href: string) => location.pathname === href;
 
@@ -198,7 +221,7 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
               <div className="relative" ref={notifRef}>
                 <button
                   id="notif-bell-btn"
-                  onClick={() => setNotifOpen((o) => !o)}
+                  onClick={handleOpenNotifPanel}
                   className="relative w-9 h-9 rounded-full flex items-center justify-center hover:bg-muted transition-colors"
                   aria-label="Notifications"
                 >
@@ -237,32 +260,36 @@ const DashboardLayout = ({ children }: DashboardLayoutProps) => {
                     <div className="max-h-72 overflow-y-auto divide-y divide-border/50">
                       {notifications.length === 0 ? (
                         <div className="py-10 text-center text-sm text-muted-foreground">
-                          No notifications
+                          No notifications yet
                         </div>
                       ) : (
-                        notifications.map((n) => (
-                          <div
-                            key={n.id}
-                            className={`flex items-start gap-3 px-4 py-3 transition-colors ${
-                              n.read ? "opacity-60" : "bg-muted/30"
-                            }`}
-                          >
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${n.bg}`}>
-                              <n.icon className={`w-4 h-4 ${n.color}`} />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-semibold">{n.title}</p>
-                              <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{n.body}</p>
-                              <p className="text-[10px] text-muted-foreground/70 mt-1">{n.time}</p>
-                            </div>
-                            <button
-                              onClick={() => dismissNotif(n.id)}
-                              className="shrink-0 text-muted-foreground hover:text-foreground mt-0.5 transition-colors"
+                        notifications.map((n) => {
+                          const style = notifStyle[n.type] ?? notifStyle.info;
+                          const Icon = style.icon;
+                          return (
+                            <div
+                              key={n.id}
+                              className={`flex items-start gap-3 px-4 py-3 transition-colors ${
+                                n.read ? "opacity-60" : "bg-muted/30"
+                              }`}
                             >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ))
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${style.bg}`}>
+                                <Icon className={`w-4 h-4 ${style.color}`} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-semibold">{n.title}</p>
+                                <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">{n.body}</p>
+                                <p className="text-[10px] text-muted-foreground/70 mt-1">{timeAgo(n.created_at)}</p>
+                              </div>
+                              <button
+                                onClick={() => dismissNotif(n.id)}
+                                className="shrink-0 text-muted-foreground hover:text-foreground mt-0.5 transition-colors"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
 
